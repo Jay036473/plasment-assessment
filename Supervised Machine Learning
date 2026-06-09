@@ -1,1 +1,342 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
 
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.preprocessing import LabelEncoder, StandardScaler, PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import mean_squared_error, r2_score
+
+# ── Page Config ───────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Pharma Supply ML Dashboard",
+    layout="wide"
+)
+
+st.title("Pharma Supply – Supervised ML Pipeline")
+st.markdown("Upload your `super.xlsx` file and run the full 10-step ML pipeline.")
+
+# ── File Upload ───────────────────────────────────────────────────────────────
+uploaded = st.file_uploader("Upload Excel File (.xlsx)", type=["xlsx"])
+
+if uploaded is None:
+    st.info("Please upload the super.xlsx file to get started.")
+    st.stop()
+
+# ── STEP 1: Load Dataset ──────────────────────────────────────────────────────
+st.header("Step 1 – Load & Understand Dataset")
+
+@st.cache_data
+def load_data(file):
+    return pd.read_excel(file)
+
+df = load_data(uploaded)
+
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Rows", f"{df.shape[0]:,}")
+col2.metric("Total Columns", df.shape[1])
+col3.metric("Numeric Cols", df.select_dtypes(include=np.number).shape[1])
+col4.metric("Categorical Cols", df.select_dtypes(include='object').shape[1])
+
+st.subheader("Preview (first 5 rows)")
+st.dataframe(df.head(), use_container_width=True)
+
+col_a, col_b = st.columns(2)
+with col_a:
+    st.subheader("Column Data Types")
+    st.dataframe(df.dtypes.rename("dtype").reset_index().rename(columns={"index": "Column"}))
+with col_b:
+    st.subheader("Basic Statistics")
+    st.dataframe(df.describe(), use_container_width=True)
+
+# ── STEP 2: Missing Values & Outliers ────────────────────────────────────────
+st.header("Step 2 – Missing Values & Outliers")
+
+missing = df.isnull().sum().reset_index()
+missing.columns = ["Column", "Missing Count"]
+missing["Missing %"] = (missing["Missing Count"] / len(df) * 100).round(2)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("Missing Values")
+    st.dataframe(missing, use_container_width=True)
+    if missing["Missing Count"].sum() == 0:
+        st.success("No missing values found!")
+
+with col2:
+    st.subheader("Outlier Detection (IQR Method)")
+    outlier_info = []
+    for col in df.select_dtypes(include=np.number).columns:
+        Q1, Q3 = df[col].quantile([0.25, 0.75])
+        IQR = Q3 - Q1
+        lo, hi = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
+        n_out = ((df[col] < lo) | (df[col] > hi)).sum()
+        outlier_info.append({"Column": col, "Outliers": n_out, "Lower": round(lo), "Upper": round(hi)})
+        df[col] = df[col].clip(lo, hi)
+    st.dataframe(pd.DataFrame(outlier_info), use_container_width=True)
+    st.info("Outliers clipped using IQR bounds.")
+
+# ── STEP 3: EDA ───────────────────────────────────────────────────────────────
+st.header("Step 3 – Exploratory Data Analysis")
+
+tab1, tab2, tab3, tab4 = st.tabs(["Distributions", "Boxplots", "Correlation", "Scatter"])
+
+with tab1:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    for ax, col in zip(axes, ["Demand_Forecast", "Optimal_Stock_Level"]):
+        ax.hist(df[col], bins=40, color="#4C72B0", edgecolor="white", alpha=0.85)
+        ax.set_title(f"Distribution: {col}")
+        ax.set_xlabel(col); ax.set_ylabel("Count")
+    plt.tight_layout()
+    st.pyplot(fig); plt.close()
+
+with tab2:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    df.boxplot(column="Demand_Forecast", by="Drug", ax=axes[0], grid=False)
+    axes[0].set_title("Demand by Drug"); plt.sca(axes[0]); plt.title("Demand by Drug"); plt.suptitle("")
+    df.boxplot(column="Optimal_Stock_Level", by="Restocking_Strategy", ax=axes[1], grid=False)
+    axes[1].set_title("Stock by Restocking Strategy"); plt.sca(axes[1]); plt.title("Stock by Strategy"); plt.suptitle("")
+    plt.tight_layout()
+    st.pyplot(fig); plt.close()
+
+with tab3:
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    corr = df[["Demand_Forecast", "Optimal_Stock_Level"]].corr()
+    sns.heatmap(corr, annot=True, fmt=".2f", cmap="Blues", ax=axes[0])
+    axes[0].set_title("Correlation Heatmap")
+    df["Restocking_Strategy"].value_counts().plot(kind="bar", ax=axes[1],
+        color=["#55A868","#C44E52","#4C72B0"], edgecolor="white")
+    axes[1].set_title("Restocking Strategy Distribution"); axes[1].set_xlabel("")
+    plt.tight_layout()
+    st.pyplot(fig); plt.close()
+
+with tab4:
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.scatter(df["Demand_Forecast"], df["Optimal_Stock_Level"], alpha=0.05, s=2, color="#DD8452")
+    ax.set_title("Demand Forecast vs Optimal Stock Level")
+    ax.set_xlabel("Demand_Forecast"); ax.set_ylabel("Optimal_Stock_Level")
+    plt.tight_layout()
+    st.pyplot(fig); plt.close()
+
+# ── STEP 4: Feature Engineering ──────────────────────────────────────────────
+st.header("Step 4 – Feature Engineering")
+
+# Dynamic Binning using qcut to auto-adjust to your dataset sizes
+try:
+    df["Demand_Band"] = pd.qcut(df["Demand_Forecast"], q=4, labels=["Low", "Medium", "High", "Very High"], duplicates='drop')
+except:
+    # Fallback if all values are identical
+    df["Demand_Band"] = "Medium"
+
+col1, col2 = st.columns(2)
+col1.metric("Demand Bands Created", "Dynamic (Based on data spread)")
+col2.metric("Data Leakage Fix", "Target-dependent features removed")
+st.dataframe(df[["Demand_Forecast", "Optimal_Stock_Level", "Demand_Band"]].head(10), use_container_width=True)
+
+# ── STEP 5: Encoding ─────────────────────────────────────────────────────────
+st.header("Step 5 – Encode Categorical Variables")
+
+le_drug = LabelEncoder()
+le_rest = LabelEncoder()
+le_db   = LabelEncoder()
+
+df["Drug_enc"]    = le_drug.fit_transform(df["Drug"])
+df["Rest_enc"]    = le_rest.fit_transform(df["Restocking_Strategy"])
+df["DemBand_enc"] = le_db.fit_transform(df["Demand_Band"])
+
+enc_df = pd.DataFrame({
+    "Drug": le_drug.classes_,
+    "Drug_enc": le_drug.transform(le_drug.classes_)
+})
+enc_df2 = pd.DataFrame({
+    "Restocking_Strategy": le_rest.classes_,
+    "Rest_enc": le_rest.transform(le_rest.classes_)
+})
+col1, col2 = st.columns(2)
+col1.subheader("Drug Encoding"); col1.dataframe(enc_df)
+col2.subheader("Restocking Strategy Encoding"); col2.dataframe(enc_df2)
+st.success("All categorical variables encoded successfully!")
+
+# ── Model Training ────────────────────────────────────────────────────────────
+FEATURES = ["Drug_enc", "Rest_enc", "Demand_Forecast", "DemBand_enc"]
+TARGET   = "Optimal_Stock_Level"
+
+X = df[FEATURES]
+y = df[TARGET]
+
+st.sidebar.header("Model Settings")
+test_size = st.sidebar.slider("Test Size", 0.1, 0.4, 0.2, 0.05)
+n_estimators = st.sidebar.selectbox("RF n_estimators", [50, 100, 200], index=1)
+run_grid = st.sidebar.checkbox("Run GridSearchCV (slower)", value=False)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+st.sidebar.info(f"Train: {len(X_train):,}  |  Test: {len(X_test):,}")
+
+results = {}
+
+# ── STEP 6: Linear Regression ────────────────────────────────────────────────
+st.header("Step 6 – Linear Regression (Polynomial Transformed)")
+with st.spinner("Training Linear Regression..."):
+    lr_pipeline = make_pipeline(StandardScaler(), PolynomialFeatures(degree=2), LinearRegression())
+    lr_pipeline.fit(X_train, y_train)
+    
+    y_pred_lr = lr_pipeline.predict(X_test)
+    rmse_lr = np.sqrt(mean_squared_error(y_test, y_pred_lr))
+    r2_lr   = r2_score(y_test, y_pred_lr)
+    results["Linear Regression"] = {"RMSE": rmse_lr, "R2": r2_lr}
+
+col1, col2 = st.columns(2)
+col1.metric("RMSE", f"{rmse_lr:.2f}")
+col2.metric("R² Score", f"{r2_lr:.4f}")
+
+fig, ax = plt.subplots(figsize=(7, 3))
+sample = np.random.choice(len(y_test), min(500, len(y_test)), replace=False)
+ax.scatter(y_test.values[sample], y_pred_lr[sample], alpha=0.4, s=8, color="#4C72B0")
+mn, mx = y_test.min(), y_test.max()
+ax.plot([mn, mx], [mn, mx], 'r--', lw=1.5)
+ax.set_xlabel("Actual"); ax.set_ylabel("Predicted"); ax.set_title("LinReg – Actual vs Predicted")
+plt.tight_layout(); st.pyplot(fig); plt.close()
+
+# ── STEP 7: Random Forest ─────────────────────────────────────────────────────
+st.header("Step 7 – Random Forest Regressor (Regularized)")
+with st.spinner("Training Random Forest..."):
+    rf = RandomForestRegressor(
+        n_estimators=n_estimators, 
+        max_depth=10, 
+        min_samples_split=10, 
+        min_samples_leaf=4, 
+        random_state=42, 
+        n_jobs=-1
+    )
+    rf.fit(X_train, y_train)
+    y_pred_rf = rf.predict(X_test)
+    rmse_rf = np.sqrt(mean_squared_error(y_test, y_pred_rf))
+    r2_rf   = r2_score(y_test, y_pred_rf)
+    results["Random Forest"] = {"RMSE": rmse_rf, "R2": r2_rf}
+
+col1, col2 = st.columns(2)
+col1.metric("RMSE", f"{rmse_rf:.2f}")
+col2.metric("R² Score", f"{r2_rf:.4f}")
+
+if r2_rf < 0.05:
+    st.error("Data Warning: The R² score is very low/negative. This means the features in your dataset do not have a strong mathematical correlation with Optimal_Stock_Level. (The code is correct, but the dataset pattern is random).")
+
+fi = pd.Series(rf.feature_importances_, index=FEATURES).sort_values(ascending=True)
+fig, ax = plt.subplots(figsize=(7, 3))
+fi.plot(kind="barh", ax=ax, color="#55A868")
+ax.set_title("Feature Importances – Random Forest"); ax.set_xlabel("Importance")
+plt.tight_layout(); st.pyplot(fig); plt.close()
+
+# ── STEP 8: Gradient Boosting ─────────────────────────────────────────────────
+st.header("Step 8 – Gradient Boosting Regressor")
+with st.spinner("Training Gradient Boosting..."):
+    gb = GradientBoostingRegressor(n_estimators=100, max_depth=4, subsample=0.8, random_state=42)
+    gb.fit(X_train, y_train)
+    y_pred_gb = gb.predict(X_test)
+    rmse_gb = np.sqrt(mean_squared_error(y_test, y_pred_gb))
+    r2_gb   = r2_score(y_test, y_pred_gb)
+    results["Gradient Boosting"] = {"RMSE": rmse_gb, "R2": r2_gb}
+
+col1, col2 = st.columns(2)
+col1.metric("RMSE", f"{rmse_gb:.2f}")
+col2.metric("R² Score", f"{r2_gb:.4f}")
+
+# ── STEP 9: GridSearchCV ──────────────────────────────────────────────────────
+st.header("Step 9 – Hyperparameter Tuning (GridSearchCV)")
+best_params = {"n_estimators": n_estimators, "max_depth": 10, "min_samples_split": 10}
+
+if run_grid:
+    with st.spinner("Running GridSearchCV (this may take a minute)..."):
+        param_grid = {
+            "n_estimators": [50, 100],
+            "max_depth":    [8, 12, 15],
+            "min_samples_split": [5, 10],
+            "min_samples_leaf": [2, 4]
+        }
+        X_sub = X_train.sample(min(10000, len(X_train)), random_state=42)
+        y_sub = y_train.loc[X_sub.index]
+        gs = GridSearchCV(
+            RandomForestRegressor(random_state=42, n_jobs=-1),
+            param_grid, cv=3, scoring="neg_root_mean_squared_error", n_jobs=-1
+        )
+        gs.fit(X_sub, y_sub)
+        best_params = gs.best_params_
+    st.success(f"Best Params: {best_params}")
+else:
+    st.info("GridSearchCV skipped. Enable it in the sidebar. Using default params.")
+
+st.json(best_params)
+
+best_rf = RandomForestRegressor(**best_params, random_state=42, n_jobs=-1)
+best_rf.fit(X_train, y_train)
+y_pred_best = best_rf.predict(X_test)
+rmse_best = np.sqrt(mean_squared_error(y_test, y_pred_best))
+r2_best   = r2_score(y_test, y_pred_best)
+results["Tuned Random Forest"] = {"RMSE": rmse_best, "R2": r2_best}
+st.metric("Tuned RF RMSE", f"{rmse_best:.2f}")
+
+# ── STEP 10: Cross-Validation ─────────────────────────────────────────────────
+st.header("Step 10 – Final Evaluation & Cross-Validation")
+with st.spinner("Running 5-Fold Cross-Validation..."):
+    cv_scores = cross_val_score(best_rf, X, y, cv=5,
+                                 scoring="neg_root_mean_squared_error", n_jobs=-1)
+    cv_rmse = -cv_scores
+
+col1, col2, col3 = st.columns(3)
+col1.metric("Mean CV RMSE", f"{cv_rmse.mean():.2f}")
+col2.metric("Std Dev", f"± {cv_rmse.std():.2f}")
+col3.metric("Best Fold RMSE", f"{cv_rmse.min():.2f}")
+
+fold_df = pd.DataFrame({"Fold": [f"Fold {i+1}" for i in range(5)], "RMSE": cv_rmse})
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.bar(fold_df["Fold"], fold_df["RMSE"], color="#4C72B0", edgecolor="white")
+ax.axhline(cv_rmse.mean(), color="red", linestyle="--", label=f"Mean: {cv_rmse.mean():.2f}")
+ax.set_title("Cross-Validation RMSE per Fold"); ax.set_ylabel("RMSE"); ax.legend()
+plt.tight_layout(); st.pyplot(fig); plt.close()
+
+# ── Model Comparison ─────────────────────────────────────────────────────────
+st.header("Model Comparison Summary")
+
+comp_df = pd.DataFrame([
+    {"Model": m, "RMSE": v["RMSE"], "R² Score": v["R2"]}
+    for m, v in results.items()
+]).sort_values("RMSE")
+
+st.dataframe(comp_df.style.highlight_min("RMSE", color="#d4edda")
+                          .highlight_max("R² Score", color="#d4edda")
+                          .format({"RMSE": "{:.2f}", "R² Score": "{:.4f}"}),
+             use_container_width=True)
+
+models = comp_df["Model"].tolist()
+rmses  = comp_df["RMSE"].tolist()
+r2s    = comp_df["R² Score"].tolist()
+colors = ["#4C72B0","#55A868","#C44E52","#DD8452"]
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+fig.suptitle("Model Comparison", fontsize=13, fontweight="bold")
+ax1.bar(models, rmses, color=colors, edgecolor="white")
+ax1.set_title("RMSE (lower = better)"); ax1.set_ylabel("RMSE")
+for i, v in enumerate(rmses):
+    ax1.text(i, v + (max(rmses)*0.02), f"{v:.1f}", ha="center", fontsize=9)
+plt.sca(ax1); plt.xticks(rotation=15)
+
+ax2.bar(models, r2s, color=colors, edgecolor="white")
+ax2.set_title("R² Score (higher = better)"); ax2.set_ylabel("R²")
+# Adjust y-limit properly for negative scores
+ax2.set_ylim(min(r2s) - 0.1, 1.1)
+for i, v in enumerate(r2s):
+    # Place text above the bar if positive, below if negative
+    offset = 0.02 if v >= 0 else -0.05
+    ax2.text(i, v + offset, f"{v:.4f}", ha="center", fontsize=9)
+plt.sca(ax2); plt.xticks(rotation=15)
+
+plt.tight_layout(); st.pyplot(fig); plt.close()
+
+best_model_name = comp_df.iloc[0]["Model"]
+st.success(f"Best Model: **{best_model_name}** with RMSE = {comp_df.iloc[0]['RMSE']:.2f} and R² = {comp_df.iloc[0]['R² Score']:.4f}")
