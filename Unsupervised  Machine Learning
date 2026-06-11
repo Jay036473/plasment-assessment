@@ -1,1 +1,546 @@
 
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans, AgglomerativeClustering
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+from sklearn.metrics import silhouette_score
+from scipy.cluster.hierarchy import dendrogram, linkage
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(page_title="Universal Clustering Dashboard", layout="wide")
+
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.4rem; font-weight: 800;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        text-align: center; padding: 1rem 0;
+    }
+    .section-header {
+        font-size: 1.3rem; font-weight: 700; color: #4a4a8a;
+        border-bottom: 3px solid #667eea;
+        padding-bottom: 0.3rem; margin: 1.5rem 0 1rem 0;
+    }
+    .strategy-box {
+        background: #f8f9ff; border-radius: 12px;
+        padding: 1rem 1.4rem; border: 1px solid #dde1f9; margin-bottom: 0.8rem;
+    }
+    .info-box {
+        background: #eef2ff; border-radius: 10px;
+        padding: 0.8rem 1.2rem; border-left: 4px solid #667eea;
+        margin-bottom: 1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-header">Universal Clustering Dashboard</div>', unsafe_allow_html=True)
+st.markdown(
+    "<p style='text-align:center;color:#888;margin-bottom:1rem;'>Automatic K-Means & Hierarchical Clustering Dashboard</p>",
+    unsafe_allow_html=True)
+
+# ── SIDEBAR ───────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## Settings")
+    n_clusters = st.slider("Number of Clusters", 2, 10, 4)
+    use_dr = st.radio("Visualization Method", ["PCA", "t-SNE"], index=0)
+    tsne_perp = st.slider("t-SNE Perplexity", 5, 50, 30)
+    st.markdown("---")
+    st.info("- Dataset loaded locally\n\n- Columns automatically detected\n\n- No hardcoded column names")
+
+
+# ── LOAD DATA ─────────────────────────────────────────────────
+@st.cache_data
+def load_data(file_path):
+    try:
+        # First try reading as standard CSV
+        df = pd.read_csv(file_path)
+        return df
+    except Exception:
+        try:
+            # Fallback for encoding issues
+            df = pd.read_csv(file_path, encoding="latin-1")
+            return df
+        except Exception as e:
+            st.error(f"Error loading data: {e}")
+            return None
+
+# SET YOUR FILE NAME HERE
+FILE_PATH = "D:/PLASMENT-ASSINMENT/CSV/unsuper.csv"
+
+raw_df = load_data(FILE_PATH)
+
+if raw_df is None:
+    st.error(f"Error: File '{FILE_PATH}' not found. Please ensure the dataset and the code are in the same folder.")
+    st.stop()
+
+
+# ── CLEAN DATA ────────────────────────────────────────────────
+@st.cache_data
+def clean_data(df):
+    df = df.copy()
+    before = len(df)
+    df = df.drop_duplicates()
+    # Only drop rows where ALL numeric columns are NaN
+    num_cols = df.select_dtypes(include=np.number).columns
+    df = df.dropna(subset=num_cols, how="all")
+    # Fill remaining NaN in numeric columns with the median
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+    return df, before - len(df)
+
+
+df, removed = clean_data(raw_df)
+
+# ── AUTO-DETECT COLUMNS ───────────────────────────────────────
+all_num_cols = df.select_dtypes(include=np.number).columns.tolist()
+all_cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
+
+
+# Smart exclude: ID-like columns (too many unique values or named 'id')
+def is_id_col(col, series):
+    if col.lower() in ["id", "index", "row", "rownum", "no", "number", "sno", "sr"]:
+        return True
+    if series.nunique() == len(series):  # all unique = ID
+        return True
+    return False
+
+
+feature_pool = [c for c in all_num_cols if not is_id_col(c, df[c])]
+
+# ── TABS ──────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "Data Overview",
+    "EDA & Patterns",
+    "Elbow Method",
+    "K-Means",
+    "Hierarchical",
+    "Cluster Strategy"
+])
+
+# ═════════════════════════════════════════════════════════════
+# TAB 1 – DATA OVERVIEW
+# ═════════════════════════════════════════════════════════════
+with tab1:
+    st.markdown('<div class="section-header">Dataset Summary</div>', unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Rows", f"{len(raw_df):,}")
+    c2.metric("After Cleaning", f"{len(df):,}")
+    c3.metric("Removed", f"{removed:,}")
+    c4.metric("Numeric Columns", f"{len(all_num_cols)}")
+    c5.metric("Text Columns", f"{len(all_cat_cols)}")
+
+    st.markdown('<div class="section-header">Sample Data (First 10 Rows)</div>', unsafe_allow_html=True)
+    st.dataframe(df.head(10), use_container_width=True)
+
+    st.markdown('<div class="section-header">Descriptive Statistics</div>', unsafe_allow_html=True)
+    if feature_pool:
+        st.dataframe(df[feature_pool].describe().round(2), use_container_width=True)
+
+    # Categorical columns distribution
+    if all_cat_cols:
+        st.markdown('<div class="section-header">Categorical Column Distributions</div>', unsafe_allow_html=True)
+        # Show max 4 categorical columns
+        show_cats = all_cat_cols[:4]
+        gcols = st.columns(min(len(show_cats), 2))
+        for i, col in enumerate(show_cats):
+            vc = df[col].value_counts().head(15).reset_index()
+            vc.columns = [col, "Count"]
+            fig = px.bar(vc, x=col, y="Count", color=col,
+                         title=f"{col} Distribution",
+                         color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig.update_layout(showlegend=False, height=300, xaxis_tickangle=-30)
+            gcols[i % 2].plotly_chart(fig, use_container_width=True)
+
+# ═════════════════════════════════════════════════════════════
+# TAB 2 – EDA
+# ═════════════════════════════════════════════════════════════
+with tab2:
+    if not feature_pool:
+        st.warning("No numeric columns found for analysis.")
+        st.stop()
+
+    st.markdown('<div class="section-header">Column Distribution (Histograms)</div>', unsafe_allow_html=True)
+
+    # Show histogram for each numeric column (max 8)
+    show_cols = feature_pool[:8]
+    n_cols = min(3, len(show_cols))
+    rows_needed = (len(show_cols) + n_cols - 1) // n_cols
+    for r in range(rows_needed):
+        cols_row = st.columns(n_cols)
+        for c_idx in range(n_cols):
+            col_idx = r * n_cols + c_idx
+            if col_idx < len(show_cols):
+                col = show_cols[col_idx]
+                fig = px.histogram(df, x=col, nbins=30,
+                                   color_discrete_sequence=["#667eea"],
+                                   title=col, opacity=0.8)
+                fig.update_layout(height=260, margin=dict(t=35, b=20, l=20, r=20),
+                                  showlegend=False)
+                cols_row[c_idx].plotly_chart(fig, use_container_width=True)
+
+    # Scatter: user picks X and Y
+    st.markdown('<div class="section-header">Scatter Plot — Choose Columns</div>', unsafe_allow_html=True)
+    sc1, sc2, sc3 = st.columns(3)
+    x_col = sc1.selectbox("X Axis", feature_pool, index=0)
+    y_col = sc2.selectbox("Y Axis", feature_pool, index=min(1, len(feature_pool) - 1))
+    color_col = sc3.selectbox("Color By", ["None"] + all_cat_cols + feature_pool, index=0)
+
+    scatter_color = None if color_col == "None" else color_col
+    fig_sc = px.scatter(df.sample(min(2000, len(df))),
+                        x=x_col, y=y_col, color=scatter_color,
+                        opacity=0.6, title=f"{x_col} vs {y_col}",
+                        color_discrete_sequence=px.colors.qualitative.Bold)
+    fig_sc.update_layout(height=420)
+    st.plotly_chart(fig_sc, use_container_width=True)
+
+    # Correlation heatmap
+    if len(feature_pool) >= 3:
+        st.markdown('<div class="section-header">Correlation Heatmap</div>', unsafe_allow_html=True)
+        corr_cols = feature_pool[:12]  # max 12 columns
+        corr = df[corr_cols].corr()
+        fig_corr = px.imshow(corr, text_auto=".2f", color_continuous_scale="RdBu_r",
+                             title="Feature Correlation", aspect="auto")
+        fig_corr.update_layout(height=450)
+        st.plotly_chart(fig_corr, use_container_width=True)
+
+# ═════════════════════════════════════════════════════════════
+# TAB 3 – ELBOW METHOD
+# ═════════════════════════════════════════════════════════════
+with tab3:
+    st.markdown('<div class="section-header">Optimal K — Elbow & Silhouette</div>', unsafe_allow_html=True)
+
+    if not feature_pool:
+        st.warning("No numeric features available.")
+        st.stop()
+
+    st.markdown("**Select features for clustering:**")
+    default_sel = feature_pool[:min(5, len(feature_pool))]
+    sel_features = st.multiselect("Features", feature_pool, default=default_sel)
+
+    if len(sel_features) < 2:
+        st.warning("Please select at least 2 features.")
+        st.stop()
+
+    X_raw = df[sel_features].copy()
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X_raw)
+
+    k_range = range(2, min(11, len(df) // 10 + 2))
+    inertias, silhouettes = [], []
+
+    with st.spinner("Running Elbow analysis..."):
+        for k in k_range:
+            km = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = km.fit_predict(X)
+            inertias.append(km.inertia_)
+            silhouettes.append(silhouette_score(X, labels))
+
+    c1, c2 = st.columns(2)
+
+    fig_e = go.Figure()
+    fig_e.add_trace(go.Scatter(x=list(k_range), y=inertias, mode="lines+markers",
+                               line=dict(color="#667eea", width=3),
+                               marker=dict(size=9, color="#764ba2")))
+    fig_e.add_vline(x=n_clusters, line_dash="dash", line_color="red",
+                    annotation_text=f"K={n_clusters}", annotation_position="top right")
+    fig_e.update_layout(title="Elbow Method — Inertia vs K",
+                        xaxis_title="K", yaxis_title="Inertia", height=360)
+    c1.plotly_chart(fig_e, use_container_width=True)
+
+    fig_s = go.Figure()
+    fig_s.add_trace(go.Scatter(x=list(k_range), y=silhouettes, mode="lines+markers",
+                               line=dict(color="#f093fb", width=3),
+                               marker=dict(size=9, color="#f5576c")))
+    fig_s.add_vline(x=n_clusters, line_dash="dash", line_color="red")
+    fig_s.update_layout(title="Silhouette Score vs K",
+                        xaxis_title="K", yaxis_title="Score", height=360)
+    c2.plotly_chart(fig_s, use_container_width=True)
+
+    best_k = list(k_range)[np.argmax(silhouettes)]
+    st.success(f"Best silhouette score K = **{best_k}** | You selected K = **{n_clusters}**")
+
+    # Save to session
+    st.session_state["X"] = X
+    st.session_state["X_raw"] = X_raw
+    st.session_state["sel_features"] = sel_features
+
+# ═════════════════════════════════════════════════════════════
+# TAB 4 – K-MEANS
+# ═════════════════════════════════════════════════════════════
+with tab4:
+    st.markdown('<div class="section-header">K-Means Clustering</div>', unsafe_allow_html=True)
+
+    if "X" not in st.session_state:
+        st.warning("Please open the 'Elbow Method' tab first and select features.")
+        st.stop()
+
+    X = st.session_state["X"]
+    X_raw = st.session_state["X_raw"]
+    sel_features = st.session_state["sel_features"]
+
+    with st.spinner("Fitting K-Means..."):
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        km_labels = km.fit_predict(X)
+        sil = float(silhouette_score(X, km_labels))
+
+    df_orig = df.loc[X_raw.index].copy()
+    df_orig["KMeans_Cluster"] = km_labels
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Silhouette Score", f"{sil:.4f}")
+    c2.metric("Clusters", n_clusters)
+    c3.metric("Data Points", f"{len(X_raw):,}")
+
+    # Dimensionality reduction
+    st.markdown('<div class="section-header">Cluster Visualization</div>', unsafe_allow_html=True)
+    with st.spinner(f"Computing {use_dr}..."):
+        if use_dr == "PCA":
+            reducer = PCA(n_components=2, random_state=42)
+            coords = reducer.fit_transform(X)
+            var = reducer.explained_variance_ratio_
+            ax_labels = [f"PC1 ({var[0] * 100:.1f}%)", f"PC2 ({var[1] * 100:.1f}%)"]
+        else:
+            n_sample = min(2000, len(X))
+            idx_sample = np.random.choice(len(X), n_sample, replace=False)
+            reducer = TSNE(n_components=2, perplexity=tsne_perp, random_state=42)
+            coords_full = np.zeros((len(X), 2))
+            coords_full[idx_sample] = reducer.fit_transform(X[idx_sample])
+            coords = coords_full
+            ax_labels = ["t-SNE 1", "t-SNE 2"]
+
+    plot_df = pd.DataFrame(coords, columns=ax_labels)
+    plot_df["Cluster"] = km_labels.astype(str)
+
+    fig_vis = px.scatter(plot_df, x=ax_labels[0], y=ax_labels[1],
+                         color="Cluster", title=f"K-Means Clusters — {use_dr}",
+                         color_discrete_sequence=px.colors.qualitative.Bold,
+                         opacity=0.7)
+    fig_vis.update_layout(height=480)
+    st.plotly_chart(fig_vis, use_container_width=True)
+
+    # Cluster profile — ALL numeric columns
+    st.markdown('<div class="section-header">Cluster Profiles</div>', unsafe_allow_html=True)
+    profile_cols = [c for c in feature_pool if c in df_orig.columns]
+    profile = df_orig.groupby("KMeans_Cluster")[profile_cols].mean().round(2)
+    profile.index = [f"Cluster {i}" for i in profile.index]
+    st.dataframe(profile.style.background_gradient(cmap="YlOrRd", axis=0), use_container_width=True)
+
+    # Radar chart
+    if len(profile_cols) >= 3:
+        st.markdown('<div class="section-header">Radar Chart</div>', unsafe_allow_html=True)
+        radar_cols = profile_cols[:8]  # max 8 for readability
+        norm_p = (profile[radar_cols] - profile[radar_cols].min()) / \
+                 (profile[radar_cols].max() - profile[radar_cols].min() + 1e-9)
+        colors = px.colors.qualitative.Bold
+        fig_r = go.Figure()
+        for i, row_name in enumerate(norm_p.index):
+            vals = norm_p.loc[row_name].tolist()
+            vals += vals[:1]
+            fig_r.add_trace(go.Scatterpolar(
+                r=vals, theta=radar_cols + [radar_cols[0]],
+                fill="toself", name=row_name,
+                line_color=colors[i % len(colors)]))
+        fig_r.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                            height=420, title="Normalized Cluster Radar")
+        st.plotly_chart(fig_r, use_container_width=True)
+
+    # Cluster size bar
+    st.markdown('<div class="section-header">Cluster Sizes</div>', unsafe_allow_html=True)
+    size_df = df_orig["KMeans_Cluster"].value_counts().sort_index().reset_index()
+    size_df.columns = ["Cluster", "Count"]
+    size_df["Cluster"] = size_df["Cluster"].astype(str)
+    fig_size = px.bar(size_df, x="Cluster", y="Count", color="Cluster",
+                      text_auto=True, title="Number of Points per Cluster",
+                      color_discrete_sequence=px.colors.qualitative.Bold)
+    fig_size.update_layout(showlegend=False, height=300)
+    st.plotly_chart(fig_size, use_container_width=True)
+
+    # Download
+    csv_km = df_orig.to_csv(index=False).encode("utf-8")
+    st.download_button("Download K-Means Labeled CSV", csv_km,
+                       "kmeans_clustered.csv", "text/csv", type="primary")
+
+    st.session_state["df_orig_km"] = df_orig
+    st.session_state["km_labels"] = km_labels
+    st.session_state["profile"] = profile
+    st.session_state["profile_cols"] = profile_cols
+    st.session_state["coords"] = coords
+    st.session_state["ax_labels"] = ax_labels
+
+# ═════════════════════════════════════════════════════════════
+# TAB 5 – HIERARCHICAL
+# ═════════════════════════════════════════════════════════════
+with tab5:
+    st.markdown('<div class="section-header">Hierarchical Clustering</div>', unsafe_allow_html=True)
+
+    if "X" not in st.session_state:
+        st.warning("Please open the 'Elbow Method' tab first.")
+        st.stop()
+
+    X = st.session_state["X"]
+    X_raw = st.session_state["X_raw"]
+    df_orig_h = df.loc[X_raw.index].copy()
+
+    linkage_method = st.selectbox("Linkage Method", ["ward", "complete", "average", "single"], index=0)
+
+    with st.spinner("Generating Dendrogram..."):
+        sample_size = min(300, len(X))
+        Z = linkage(X[:sample_size], method=linkage_method)
+
+    fig_dend, ax = plt.subplots(figsize=(14, 4.5))
+    ax.set_facecolor("#fafbff")
+    fig_dend.patch.set_facecolor("#fafbff")
+    dendrogram(Z, ax=ax, truncate_mode="lastp", p=30,
+               color_threshold=0.7 * max(Z[:, 2]),
+               above_threshold_color="#ccc")
+    ax.set_title(f"Dendrogram ({sample_size} samples)", fontsize=13, fontweight="bold", color="#4a4a8a")
+    ax.set_xlabel("Sample / Cluster size", fontsize=10)
+    ax.set_ylabel("Distance", fontsize=10)
+    ax.axhline(y=0.7 * max(Z[:, 2]), color="red", linestyle="--", alpha=0.6, label="Cut line")
+    ax.legend()
+    st.pyplot(fig_dend, use_container_width=True)
+
+    with st.spinner("Performing Agglomerative clustering..."):
+        ag = AgglomerativeClustering(n_clusters=n_clusters, linkage=linkage_method)
+        ag_labels = ag.fit_predict(X)
+        ag_sil = float(silhouette_score(X, ag_labels))
+
+    df_orig_h["Hier_Cluster"] = ag_labels
+
+    km_sil = float(silhouette_score(X, st.session_state.get("km_labels", ag_labels)))
+    c1, c2 = st.columns(2)
+    c1.metric("K-Means Silhouette", f"{km_sil:.4f}")
+    c2.metric("Hierarchical Silhouette", f"{ag_sil:.4f}",
+              delta=f"{ag_sil - km_sil:+.4f} vs K-Means")
+
+    if "coords" in st.session_state:
+        coords = st.session_state["coords"]
+        ax_labels = st.session_state["ax_labels"]
+        plot_h = pd.DataFrame(coords, columns=ax_labels)
+        plot_h["Cluster"] = ag_labels.astype(str)
+        fig_h = px.scatter(plot_h, x=ax_labels[0], y=ax_labels[1],
+                           color="Cluster", title=f"Hierarchical Clusters — {use_dr}",
+                           color_discrete_sequence=px.colors.qualitative.Vivid, opacity=0.7)
+        fig_h.update_layout(height=420)
+        st.plotly_chart(fig_h, use_container_width=True)
+
+    # Side-by-side profile
+    st.markdown('<div class="section-header">Comparison: K-Means vs Hierarchical</div>', unsafe_allow_html=True)
+    pcols = st.session_state.get("profile_cols", feature_pool[:6])
+    hier_profile = df_orig_h.groupby("Hier_Cluster")[pcols].mean().round(2)
+    hier_profile.index = [f"Cluster {i}" for i in hier_profile.index]
+
+    c1, c2 = st.columns(2)
+    c1.markdown("**K-Means Cluster Means**")
+    if "profile" in st.session_state:
+        c1.dataframe(
+            st.session_state["profile"][pcols] if all(c in st.session_state["profile"].columns for c in pcols) else
+            st.session_state["profile"],
+            use_container_width=True)
+    c2.markdown("**Hierarchical Cluster Means**")
+    c2.dataframe(hier_profile, use_container_width=True)
+
+    csv_h = df_orig_h.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Hierarchical Labeled CSV", csv_h,
+                       "hierarchical_clustered.csv", "text/csv")
+
+# ═════════════════════════════════════════════════════════════
+# TAB 6 – STRATEGY
+# ═════════════════════════════════════════════════════════════
+with tab6:
+    st.markdown('<div class="section-header">Cluster Profiling & Marketing Strategy</div>', unsafe_allow_html=True)
+
+    if "df_orig_km" not in st.session_state:
+        st.warning("Please open the 'K-Means' tab first.")
+        st.stop()
+
+    df_orig = st.session_state["df_orig_km"]
+    profile = st.session_state["profile"]
+    pcols = st.session_state.get("profile_cols", feature_pool[:6])
+
+    # Sort clusters by highest mean of first selected feature
+    sort_col = pcols[0] if pcols else profile.columns[0]
+    profile_sorted = profile.sort_values(sort_col, ascending=False)
+
+    total_clusters = len(profile_sorted)
+
+    for rank, (idx, row) in enumerate(profile_sorted.iterrows()):
+        cluster_num = int(idx.replace("Cluster ", ""))
+
+        # Generic segment labels based on rank
+        if rank == 0:
+            segment = "Top Segment"
+            strategy = (
+                "**Who they are:** Highest values across key features — your premium group.\n\n"
+                "**Strategy:** VIP treatment, exclusive offers, loyalty rewards. "
+                "Retain them with personalized engagement and early access to new products."
+            )
+        elif rank == 1:
+            segment = "Growth Segment"
+            strategy = (
+                "**Who they are:** Above average — strong growth potential.\n\n"
+                "**Strategy:** Targeted promotions, cross-sell opportunities, "
+                "time-limited deals to push them into the top tier."
+            )
+        elif rank == total_clusters - 1:
+            segment = "Entry Segment"
+            strategy = (
+                "**Who they are:** Newer or lower-value group with room to grow.\n\n"
+                "**Strategy:** Onboarding campaigns, introductory offers, "
+                "digital engagement to build habits and loyalty."
+            )
+        else:
+            segment = "Mid Segment"
+            strategy = (
+                "**Who they are:** Middle-ground group, moderate across features.\n\n"
+                "**Strategy:** Nurture with relevant content, surveys to understand needs, "
+                "bundle deals to increase engagement and move them upward."
+            )
+
+        st.markdown(f"### {segment} — {idx}")
+
+        # Show all metrics for this cluster
+        show_pcols = [c for c in pcols if c in row.index]
+        if show_pcols:
+            with st.expander("Cluster Metrics", expanded=True):
+                metric_cols = st.columns(min(len(show_pcols), 5))
+                for j, col in enumerate(show_pcols[:5]):
+                    metric_cols[j].metric(col, f"{row[col]:,.2f}")
+
+        st.markdown(
+            f'<div class="strategy-box">{strategy.replace(chr(10), "<br>")}</div>',
+            unsafe_allow_html=True
+        )
+
+        # Feature distribution for this cluster vs overall
+        cluster_data = df_orig[df_orig["KMeans_Cluster"] == cluster_num][show_pcols].mean()
+        overall_data = df_orig[show_pcols].mean()
+        comp_df = pd.DataFrame({
+            "Feature": show_pcols,
+            f"{idx}": cluster_data.values,
+            "Overall Avg": overall_data.values
+        })
+        fig_comp = px.bar(comp_df, x="Feature", y=[f"{idx}", "Overall Avg"],
+                          barmode="group", title=f"{idx} vs Overall Average",
+                          color_discrete_sequence=["#667eea", "#f093fb"])
+        fig_comp.update_layout(height=300, margin=dict(t=40, b=20))
+        st.plotly_chart(fig_comp, use_container_width=True)
+        st.markdown("---")
+
+    # Final download
+    st.markdown('<div class="section-header">Final Labeled Dataset Download</div>', unsafe_allow_html=True)
+    final_csv = df_orig.to_csv(index=False).encode("utf-8")
+    st.download_button("Download Complete Labeled Dataset",
+                       final_csv, "customer_segments_final.csv",
+                       "text/csv", type="primary")
