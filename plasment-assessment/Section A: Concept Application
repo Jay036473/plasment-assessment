@@ -1,1 +1,38 @@
+Section A: Concept Application
+1. You load an image with cv2.imread() and print its shape, getting (480, 640, 3). What do these three values represent?
+When working with OpenCV in Python, image dimensions are represented as a NumPy array tuple in the format (Height, Width, Channels). Therefore, (480, 640, 3) means:
 
+480: The height of the image in pixels (number of rows).
+
+640: The width of the image in pixels (number of columns).
+
+3: The number of color channels. Since this is 3, it indicates a standard color image consisting of Blue, Green, and Red (BGR) channels.
+
+2. cv2.imread() loads images in BGR order by default. Why does the BGR vs RGB distinction matter when displaying or passing images to other libraries?
+The distinction matters because almost all other popular Python imaging and plotting libraries (such as Matplotlib, PIL/Pillow, and standard web UI frameworks) expect image data to be in RGB (Red, Green, Blue) order.
+
+If you pass an OpenCV BGR image directly to Matplotlib without converting it, the red and blue channels will be swapped.
+
+As a result, a red apple will look blue, and a blue sky will look reddish-orange. You must use cv2.cvtColor(image, cv2.COLOR_BGR2RGB) before passing the image to these libraries to ensure colors display correctly.
+
+3. You resize the same image using INTER_LINEAR and INTER_AREA interpolation. When is INTER_AREA the preferred choice over INTER_LINEAR?
+
+INTER_AREA is the preferred choice when you are shrinking (downsampling) an image. It works by resampling using pixel area relations, which produces a much cleaner, smoother result and prevents "moiré patterns" (weird wavy artifacts) that can occur when drastically reducing image size.
+
+Note: INTER_LINEAR (bilinear interpolation) is generally the preferred and default method when you are making an image larger (upsampling/zooming).
+
+4. You convert an image from BGR to HSV before processing. What does the HSV colour space represent that BGR does not?
+The BGR color space defines a color by mixing varying amounts of blue, green, and red light. However, BGR is highly sensitive to changes in lighting and shadows. The HSV (Hue, Saturation, Value) color space separates color information in a way that aligns closer to human vision:
+
+Hue: The actual color or pigment itself (e.g., red, blue, yellow), represented as an angle on a color wheel.
+
+Saturation: The purity or intensity of the color (e.g., faded red vs. vibrant red).
+
+Value: The brightness or darkness of the color.
+By separating the "Value" (lighting) from the "Hue" (color), HSV allows you to isolate and track objects based purely on their actual color, making your code highly robust against shadows, glare, or varying lighting conditions.
+
+5. You need to extract a specific region from a medical scan. What is the conceptual difference between cropping an image and resizing it?
+
+Cropping: This is the process of cutting out a specific rectangular portion (Region of Interest) of the image and throwing away the rest. It preserves the original pixel data, scale, and resolution of that specific area. You use cropping when you want to focus only on a specific anatomical structure in the scan and ignore the background.
+
+Resizing (Scaling): This process changes the overall dimensions (width and height) of the entire image. It does not throw away any part of the image, but it alters the pixel data and spatial resolution (by adding or removing pixels via interpolation). You use resizing when you need the whole medical scan to fit into a specific machine learning model input size or a display window.
