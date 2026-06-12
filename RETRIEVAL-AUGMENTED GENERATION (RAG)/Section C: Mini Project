@@ -1,1 +1,719 @@
 
+import streamlit as st
+import pandas as pd
+import numpy as np
+import time
+import json
+import sys
+from io import BytesIO
+
+# --- PDF & OCR Libraries ---
+import pypdf
+import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
+import io
+
+# Tesseract નો પાથ (Windows માટે).
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# --- RAG & AI Libraries ---
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer, util
+import anthropic
+from huggingface_hub import InferenceClient
+
+# ─────────────────────────────────────────────
+# PAGE CONFIG & GLOBAL STYLES
+# ─────────────────────────────────────────────
+st.set_page_config(
+    page_title="RAG Benchmarking Engine",
+    page_icon="🔬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    /* ── FONTS ── */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+    /* ── BACKGROUND ── */
+    .stApp { background: #0F1117; color: #E2E8F0; }
+    .stSidebar { background: #161B27 !important; border-right: 1px solid #1E293B; }
+
+    /* ── HEADER ── */
+    .hero-block {
+        background: linear-gradient(135deg, #1E293B 0%, #0F172A 50%, #1E1B4B 100%);
+        border: 1px solid #334155;
+        border-radius: 16px;
+        padding: 32px 36px;
+        margin-bottom: 28px;
+        position: relative;
+        overflow: hidden;
+    }
+    .hero-block::before {
+        content: '';
+        position: absolute;
+        top: -50%;
+        right: -20%;
+        width: 400px;
+        height: 400px;
+        background: radial-gradient(circle, rgba(99,102,241,0.12) 0%, transparent 70%);
+        pointer-events: none;
+    }
+    .hero-title {
+        font-size: 1.9rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        letter-spacing: -0.5px;
+        margin: 0 0 6px 0;
+    }
+    .hero-sub {
+        font-size: 0.92rem;
+        color: #94A3B8;
+        margin: 0;
+        font-weight: 400;
+    }
+    .hero-badge {
+        display: inline-block;
+        background: #312E81;
+        color: #A5B4FC;
+        font-size: 0.72rem;
+        font-weight: 600;
+        padding: 3px 10px;
+        border-radius: 20px;
+        margin-bottom: 12px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+    }
+
+    /* ── SECTION HEADINGS ── */
+    .section-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+        color: #6366F1;
+        margin-bottom: 8px;
+    }
+    .section-title {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: #F1F5F9;
+        margin-bottom: 18px;
+    }
+
+    /* ── CARDS ── */
+    .eval-card {
+        background: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 14px;
+    }
+    .score-pill {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .pill-green  { background: #064E3B; color: #6EE7B7; }
+    .pill-yellow { background: #78350F; color: #FCD34D; }
+    .pill-red    { background: #7F1D1D; color: #FCA5A5; }
+
+    .status-ok   { background: #052E16; border-left: 4px solid #22C55E; color: #86EFAC; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; }
+    .status-warn { background: #1C1402; border-left: 4px solid #EAB308; color: #FDE68A; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; }
+    .status-bad  { background: #1A0505; border-left: 4px solid #EF4444; color: #FCA5A5; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; }
+
+    /* ── CHAT BOT ── */
+    .chat-wrapper {
+        background: #1E293B;
+        border: 1px solid #334155;
+        border-radius: 16px;
+        padding: 0;
+        overflow: hidden;
+        margin-top: 20px;
+    }
+    .chat-header {
+        background: linear-gradient(90deg, #312E81, #1E1B4B);
+        padding: 14px 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .chat-dot {
+        width: 10px; height: 10px;
+        background: #22C55E;
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0%,100% { opacity: 1; }
+        50%      { opacity: 0.4; }
+    }
+    .chat-title-text { color: #E0E7FF; font-weight: 600; font-size: 0.95rem; }
+    .chat-body { padding: 20px; max-height: 420px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+
+    /* ── USER/BOT BUBBLES ── */
+    .bubble-user {
+        align-self: flex-end;
+        background: #4338CA;
+        color: #EEF2FF;
+        padding: 10px 16px;
+        border-radius: 16px 16px 4px 16px;
+        max-width: 78%;
+        font-size: 0.88rem;
+        line-height: 1.5;
+    }
+    .bubble-bot {
+        align-self: flex-start;
+        background: #1E293B;
+        border: 1px solid #334155;
+        color: #CBD5E1;
+        padding: 10px 16px;
+        border-radius: 16px 16px 16px 4px;
+        max-width: 85%;
+        font-size: 0.88rem;
+        line-height: 1.55;
+    }
+    .bubble-bot b { color: #A5B4FC; }
+
+    /* ── SIDEBAR ── */
+    .sidebar-section { margin-bottom: 22px; }
+    .stSelectbox label, .stSlider label, .stTextInput label { color: #94A3B8 !important; font-size: 0.82rem !important; }
+
+    /* ── METRIC CHIPS ── */
+    .chip-row { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+    .chip {
+        background: #0F172A;
+        border: 1px solid #334155;
+        border-radius: 8px;
+        padding: 8px 14px;
+        font-size: 0.82rem;
+        color: #94A3B8;
+    }
+    .chip b { color: #E2E8F0; display: block; font-size: 1.05rem; }
+
+    /* ── DIVIDER ── */
+    .custom-divider { border: none; border-top: 1px solid #1E293B; margin: 28px 0; }
+
+    /* ── DATAFRAME OVERRIDE ── */
+    .stDataFrame { border-radius: 10px; overflow: hidden; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# SESSION STATE INIT
+# ─────────────────────────────────────────────
+for key, default in {
+    "metrics_log": [],
+    "chat_history": [],
+    "vector_db": None,
+    "retriever": None,
+    "context_ready": False
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+# ─────────────────────────────────────────────
+# HERO HEADER
+# ─────────────────────────────────────────────
+st.markdown("""
+<div class='hero-block'>
+    <div class='hero-badge'>TOPS Technologies · RAG Assignment</div>
+    <div class='hero-title'>🔬 Prompt Quality Benchmarking Engine</div>
+    <div class='hero-sub'>Compare Shallow vs. Deep prompt performance · Hallucination detection · Claude AI Chat Assistant</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## ⚙️ Configuration")
+    st.markdown("---")
+
+    st.markdown("**🔑 API Keys**")
+
+    hf_token = st.text_input(
+        "Hugging Face Token",
+        type="password",
+        placeholder="hf_xxxxxxxxxxxxxxxx",
+        help="huggingface.co/settings/tokens → Read token"
+    )
+
+    anthropic_key = st.text_input(
+        "Anthropic API Key",
+        type="password",
+        placeholder="sk-ant-xxxxxxxxxxxxxxxx",
+        help="console.anthropic.com → Claude Chat Bot માટે"
+    )
+
+    st.markdown("---")
+    st.markdown("**🤖 Select LLM (2 Options)**")
+
+    # --- NEW MODEL OPTIONS (QWEN INSTEAD OF ZEPHYR) ---
+    MODEL_OPTIONS = {
+        "Mistral 7B Instruct ⚡": "mistralai/Mistral-7B-Instruct-v0.3",
+        "Qwen 2.5 (7B) 🚀": "Qwen/Qwen2.5-7B-Instruct"
+    }
+    selected_display = st.selectbox(
+        "Choose generation model",
+        list(MODEL_OPTIONS.keys()),
+        help="HuggingFace Inference API — Free tier"
+    )
+    selected_model_id = MODEL_OPTIONS[selected_display]
+
+    st.markdown("---")
+    st.markdown("**🎛️ Eval Parameters**")
+    similarity_threshold = st.slider(
+        "Hallucination Detection Threshold",
+        min_value=0.0, max_value=1.0, value=0.65, step=0.05,
+        help="Scores below this are flagged as potential hallucinations"
+    )
+
+    st.markdown("---")
+    st.markdown("""
+    <div style='font-size:0.76rem; color:#475569; line-height:1.6;'>
+    <b style='color:#64748B'>HF Models Info</b><br>
+    • Mistral 7B – fast instruction model<br>
+    • Qwen 2.5 7B – highly advanced & capable<br>
+    • Both free on HF Inference API<br>
+    • Token: huggingface.co/settings/tokens
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# HELPER FUNCTIONS
+# ─────────────────────────────────────────────
+@st.cache_resource
+def load_embedder():
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
+def rewrite_prompt(shallow_prompt: str) -> str:
+    return (
+        f"Role & Persona: Act as an expert subject matter analyst specializing in the context provided.\n"
+        f"Context: Use only the retrieved document segments to answer the user query.\n"
+        f"Task: Fully address the following user inquiry: '{shallow_prompt}'\n"
+        f"Constraints:\n"
+        f"  1. Rely strictly on facts directly mentioned in the context.\n"
+        f"  2. Do not assume, extrapolate, or introduce outside information.\n"
+        f"  3. If the answer cannot be verified by the context, state 'Information not found in context.'\n"
+        f"Output Format: Provide a structured, cohesive response with bullet points where applicable."
+    )
+
+
+def calculate_similarity(text1: str, text2: str, embedding_model) -> float:
+    e1 = embedding_model.encode(text1, convert_to_tensor=True)
+    e2 = embedding_model.encode(text2, convert_to_tensor=True)
+    return float(util.cos_sim(e1, e2).item())
+
+
+def hf_generate(model_id: str, prompt: str, hf_token: str, max_tokens: int = 400) -> str:
+    """HuggingFace InferenceClient — updated for conversational task."""
+    try:
+        client = InferenceClient(model=model_id, token=hf_token)
+
+        # --- NEW CODE: Use conversational (chat) format ---
+        messages = [{"role": "user", "content": prompt}]
+
+        response = client.chat_completion(
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.1
+        )
+
+        text = response.choices[0].message.content
+        return text.strip() if text else "⚠️ Model returned empty response."
+
+    except Exception as e:
+        err = str(e)
+        if "401" in err or "unauthorized" in err.lower():
+            return "❌ Invalid HF Token. Check huggingface.co/settings/tokens"
+        elif "503" in err or "loading" in err.lower():
+            return "⏳ Model loading... 30 seconds wait કરીને ફરી try કરો."
+        elif "429" in err or "rate" in err.lower():
+            return "⏳ Rate limit. થોડી seconds wait કરો."
+        else:
+            return f"❌ HF Error: {err[:200]}"
+
+
+def claude_chat_response(messages: list, context: str, anthropic_key: str) -> str:
+    """Claude-powered chat assistant using document context."""
+    client = anthropic.Anthropic(api_key=anthropic_key)
+
+    system_prompt = (
+        "You are a helpful RAG (Retrieval-Augmented Generation) assistant. "
+        "You have access to a document context. Answer user questions based primarily on "
+        "this context. If the answer is not in the context, say so politely and answer from "
+        "your general knowledge if appropriate. Be concise, clear, and helpful.\n\n"
+        f"DOCUMENT CONTEXT:\n{context[:3000]}"
+    ) if context else (
+        "You are a helpful AI assistant specialized in explaining RAG systems, "
+        "prompt engineering, and LLM evaluation. Be concise and clear."
+    )
+
+    # Convert chat history to Anthropic format
+    api_messages = []
+    for msg in messages:
+        api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+    response = client.messages.create(
+        model="claude-3-sonnet-20240229",
+        max_tokens=600,
+        system=system_prompt,
+        messages=api_messages
+    )
+
+    if response.content:
+        return response.content[0].text
+    else:
+        return "⚠️ Claude તરફથી કોઈ જવાબ મળ્યો નથી."
+
+
+def score_to_pill(score: float, threshold: float) -> str:
+    if score >= threshold + 0.1:
+        return f"<span class='score-pill pill-green'>{score:.4f}</span>"
+    elif score >= threshold:
+        return f"<span class='score-pill pill-yellow'>{score:.4f}</span>"
+    else:
+        return f"<span class='score-pill pill-red'>{score:.4f}</span>"
+
+
+# ─────────────────────────────────────────────
+# STEP 1 – DOCUMENT INGESTION (WITH OCR SUPPORT)
+# ─────────────────────────────────────────────
+st.markdown("<div class='section-label'>Step 01</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>📄 Document Ingestion Pipeline</div>", unsafe_allow_html=True)
+
+uploaded_file = st.file_uploader(
+    "Upload your reference PDF document",
+    type=["pdf"],
+    help="The system will chunk, embed, and index this document for RAG retrieval."
+)
+
+if uploaded_file is not None:
+    embedder = load_embedder()
+    pdf_bytes = uploaded_file.read()
+
+    num_pages = 0
+
+    with st.spinner("⚙️ Extracting text layers from PDF..."):
+        pdf_reader = pypdf.PdfReader(BytesIO(pdf_bytes))
+        num_pages = len(pdf_reader.pages)
+        full_text = ""
+        for page in pdf_reader.pages:
+            t = page.extract_text()
+            if t:
+                full_text += t + "\n"
+
+    # --- NEW OCR LOGIC ---
+    # જો pypdf ને ટેક્સ્ટ ના મળે (એટલે કે ઈમેજ વાળી PDF હોય) તો OCR ચાલુ કરો
+    if len(full_text.strip()) < 50:
+        st.info(
+            "ℹ️ ડિજિટલ ટેક્સ્ટ મળ્યું નથી. સ્કેન કરેલી ઈમેજ PDF હોવાથી OCR ચાલુ થઈ રહ્યું છે... (આમાં થોડો સમય લાગી શકે છે)")
+
+        try:
+            full_text = ""
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            num_pages = len(doc)
+
+            # પ્રોગ્રેસ બાર બતાવવા માટે
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for page_num in range(len(doc)):
+                status_text.text(f"🔍 Reading image page {page_num + 1} of {len(doc)}...")
+                page = doc.load_page(page_num)
+                pix = page.get_pixmap()
+
+                # Pixmap ને PIL Image માં ફેરવો
+                img = Image.open(io.BytesIO(pix.tobytes("png")))
+
+                # OCR દ્વારા ઈમેજમાંથી ટેક્સ્ટ કાઢો
+                extracted_text = pytesseract.image_to_string(img)
+                full_text += extracted_text + "\n"
+
+                # પ્રોગ્રેસ બાર અપડેટ કરો
+                progress_bar.progress((page_num + 1) / len(doc))
+
+            status_text.empty()  # પ્રોગ્રેસ ટેક્સ્ટ કાઢી નાખો
+            progress_bar.empty()
+
+        except Exception as e:
+            st.error(f"❌ OCR ફેલ થયું. ખાતરી કરો કે કમ્પ્યુટરમાં Tesseract-OCR ઇન્સ્ટોલ કરેલું છે. એરર: {e}")
+            st.stop()
+
+    if not full_text.strip():
+        st.error(
+            "❌ આ PDF માંથી કોઈ ટેક્સ્ટ વાંચી શકાયું નથી. કૃપા કરીને બીજી ફાઈલ અપલોડ કરો.")
+        st.stop()
+
+    with st.spinner("🔗 Building FAISS vector index..."):
+        splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
+        chunks = splitter.split_text(full_text)
+        hf_emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        vdb = FAISS.from_texts(chunks, hf_emb)
+        st.session_state.vector_db = vdb
+        st.session_state.retriever = vdb.as_retriever(search_kwargs={"k": 3})
+        st.session_state.context_ready = True
+        st.session_state.full_context = full_text
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        st.markdown(f"""<div class='chip'>Total Characters<b>{len(full_text):,}</b></div>""", unsafe_allow_html=True)
+    with col_b:
+        st.markdown(f"""<div class='chip'>Pages Processed<b>{num_pages}</b></div>""", unsafe_allow_html=True)
+    with col_c:
+        st.markdown(f"""<div class='chip'>Vector Chunks<b>{len(chunks)}</b></div>""", unsafe_allow_html=True)
+
+    st.success("✅ Vector database ready. System online for RAG queries.")
+
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────
+    # STEP 2 – BENCHMARK ARENA
+    # ─────────────────────────────────────────────
+    st.markdown("<div class='section-label'>Step 02</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>⚗️ Benchmarking & Evaluation Arena</div>", unsafe_allow_html=True)
+
+    user_query = st.text_input(
+        "Enter a query to benchmark:",
+        placeholder="e.g., What are the main findings of this document?",
+        help="Enter a simple query — the system compares shallow vs. deep prompt responses."
+    )
+
+    run_col, _ = st.columns([1, 3])
+    with run_col:
+        run_btn = st.button("▶ Run Evaluation Benchmark", use_container_width=True, type="primary")
+
+    if run_btn:
+        if not hf_token:
+            st.error("❌ Please enter your Hugging Face Token in the sidebar.")
+        elif not user_query.strip():
+            st.error("❌ Please enter a query before running the benchmark.")
+        else:
+            with st.spinner("🔄 Executing RAG pipeline & quality evaluation..."):
+                start = time.time()
+
+                # Retrieve context
+                retrieved_docs = st.session_state.retriever.invoke(user_query)
+                context_text = "\n".join([d.page_content for d in retrieved_docs])
+
+                # Build prompts
+                deep_prompt = rewrite_prompt(user_query)
+
+                shallow_input = f"Context:\n{context_text}\n\nQuery: {user_query}\n\nAnswer:"
+                deep_input = f"Context:\n{context_text}\n\nInstructions:\n{deep_prompt}\n\nAnswer:"
+
+                # Generate both responses via Hugging Face
+                shallow_output = hf_generate(selected_model_id, shallow_input, hf_token)
+                deep_output = hf_generate(selected_model_id, deep_input, hf_token)
+
+                latency = round(time.time() - start, 2)
+
+                # Scoring
+                score_s = calculate_similarity(shallow_output, context_text, embedder)
+                score_d = calculate_similarity(deep_output, context_text, embedder)
+
+                flag_s = score_s < similarity_threshold
+                flag_d = score_d < similarity_threshold
+
+                # Log
+                st.session_state.metrics_log.append({
+                    "Query": user_query,
+                    "Model": selected_display,
+                    "Shallow Score": round(score_s, 4),
+                    "Deep Score": round(score_d, 4),
+                    "Improvement": round(score_d - score_s, 4),
+                    "Shallow Hallucinated": flag_s,
+                    "Deep Hallucinated": flag_d,
+                    "Latency (s)": latency
+                })
+
+            # ─── RESULT DISPLAY ───
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 🔵 Shallow Prompt")
+                st.markdown(f"<div class='eval-card'>", unsafe_allow_html=True)
+                st.caption(f"**Prompt:** `{user_query}`")
+                st.text_area("Output:", value=shallow_output, height=190, disabled=True, key="shallow_out")
+                pill = score_to_pill(score_s, similarity_threshold)
+                st.markdown(f"**Semantic Alignment:** {pill}", unsafe_allow_html=True)
+                if flag_s:
+                    st.markdown("<div class='status-bad'>⚠️ Hallucination Detected – Score below threshold</div>",
+                                unsafe_allow_html=True)
+                else:
+                    st.markdown("<div class='status-ok'>✅ Contextually Verified</div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with col2:
+                st.markdown("#### 🟣 Engineered Deep Prompt")
+                st.markdown(f"<div class='eval-card'>", unsafe_allow_html=True)
+                st.caption("**Auto-rewritten with role, constraints & output format**")
+                st.text_area("Output:", value=deep_output, height=190, disabled=True, key="deep_out")
+                pill2 = score_to_pill(score_d, similarity_threshold)
+                st.markdown(f"**Semantic Alignment:** {pill2}", unsafe_allow_html=True)
+                if flag_d:
+                    st.markdown("<div class='status-warn'>⚠️ Hallucination Risk – Verify output manually</div>",
+                                unsafe_allow_html=True)
+                else:
+                    st.markdown("<div class='status-ok'>✅ Contextually Verified</div>", unsafe_allow_html=True)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            delta = score_d - score_s
+            delta_str = f"+{delta:.4f}" if delta >= 0 else f"{delta:.4f}"
+            color = "#22C55E" if delta >= 0 else "#EF4444"
+            st.markdown(
+                f"<div style='text-align:center; color:{color}; font-size:0.9rem; margin-top:8px;'>"
+                f"⏱ Pipeline latency: <b>{latency}s</b> &nbsp;|&nbsp; Score Δ (Deep−Shallow): <b>{delta_str}</b>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+    # ─────────────────────────────────────────────
+    # STEP 3 – HISTORY TABLE & CSV EXPORT
+    # ─────────────────────────────────────────────
+    if st.session_state.metrics_log:
+        st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+        st.markdown("<div class='section-label'>Step 03</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>📊 Historical Benchmark Metrics</div>", unsafe_allow_html=True)
+
+        df = pd.DataFrame(st.session_state.metrics_log)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        csv_buf = BytesIO()
+        df.to_csv(csv_buf, index=False)
+
+        st.download_button(
+            label="⬇️ Download Metrics CSV",
+            data=csv_buf.getvalue(),
+            file_name="rag_benchmark_metrics.csv",
+            mime="text/csv"
+        )
+
+else:
+    st.info("📂 Please upload a PDF document above to begin.")
+
+# ─────────────────────────────────────────────
+# STEP 4 – CLAUDE CHAT BOT (ALWAYS VISIBLE)
+# ─────────────────────────────────────────────
+st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+st.markdown("<div class='section-label'>Step 04</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>💬 Claude AI Chat Assistant</div>", unsafe_allow_html=True)
+
+if not anthropic_key:
+    st.warning("🔑 Enter your Anthropic API Key in the sidebar to activate the Chat Assistant.")
+else:
+    # Chat header
+    st.markdown("""
+    <div class='chat-wrapper'>
+        <div class='chat-header'>
+            <div class='chat-dot'></div>
+            <span class='chat-title-text'>Claude AI — Document & RAG Assistant</span>
+            <span style='margin-left:auto; font-size:0.75rem; color:#818CF8;'>Powered by Claude Sonnet</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    context_for_chat = st.session_state.get("full_context", "")
+
+    # Display chat history
+    if st.session_state.chat_history:
+        chat_html = "<div class='chat-body'>"
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                chat_html += f"<div class='bubble-user'>👤 {msg['content']}</div>"
+            else:
+                safe_content = msg['content'].replace('\n', '<br>')
+                chat_html += f"<div class='bubble-bot'>🤖 {safe_content}</div>"
+        chat_html += "</div>"
+        st.markdown(chat_html, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style='background:#1E293B; border:1px solid #334155; border-radius:12px; padding:24px; text-align:center; color:#475569; margin-top:4px;'>
+            <div style='font-size:2rem; margin-bottom:8px;'>🤖</div>
+            <div style='font-size:0.9rem;'>Ask anything about your document or RAG concepts!<br>
+            <span style='font-size:0.78rem; color:#334155;'>e.g. "Summarize the document" · "What is RAG?" · "Explain prompt engineering"</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Input row
+    chat_col1, chat_col2 = st.columns([5, 1])
+    with chat_col1:
+        user_chat_input = st.text_input(
+            "Your message",
+            placeholder="Ask Claude about your document or RAG concepts...",
+            label_visibility="collapsed",
+            key="chat_input_box"
+        )
+    with chat_col2:
+        send_btn = st.button("Send ➤", use_container_width=True)
+
+    btn_col1, btn_col2 = st.columns([1, 5])
+    with btn_col1:
+        if st.button("🗑️ Clear Chat", use_container_width=True):
+            st.session_state.chat_history = []
+            st.rerun()
+
+    # Process message
+    if send_btn and user_chat_input.strip():
+        st.session_state.chat_history.append({"role": "user", "content": user_chat_input.strip()})
+
+        with st.spinner("🤔 Claude is thinking..."):
+            try:
+                reply = claude_chat_response(
+                    st.session_state.chat_history,
+                    context_for_chat,
+                    anthropic_key
+                )
+                st.session_state.chat_history.append({"role": "assistant", "content": reply})
+            except Exception as e:
+                err_msg = f"Error connecting to Claude: {str(e)}"
+                st.session_state.chat_history.append({"role": "assistant", "content": err_msg})
+
+        st.rerun()
+
+    # Quick suggestion chips
+    st.markdown("""
+    <div style='margin-top:12px; display:flex; flex-wrap:wrap; gap:8px;'>
+        <span style='font-size:0.75rem; color:#475569;'>Quick asks:</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    sugg_cols = st.columns(4)
+    suggestions = [
+        "Summarize the document",
+        "What is RAG?",
+        "Explain prompt engineering",
+        "What is hallucination in LLMs?"
+    ]
+    for i, (col, sugg) in enumerate(zip(sugg_cols, suggestions)):
+        with col:
+            if st.button(sugg, key=f"sugg_{i}", use_container_width=True):
+                st.session_state.chat_history.append({"role": "user", "content": sugg})
+                with st.spinner("🤔 Thinking..."):
+                    try:
+                        reply = claude_chat_response(st.session_state.chat_history, context_for_chat, anthropic_key)
+                        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+                    except Exception as e:
+                        st.session_state.chat_history.append({"role": "assistant", "content": f"Error: {str(e)}"})
+                st.rerun()
+
+# ─── FOOTER ───
+st.markdown("""
+<div style='margin-top:40px; padding:16px; text-align:center; color:#334155; font-size:0.76rem; border-top:1px solid #1E293B;'>
+    RAG Benchmarking Engine · TOPS Technologies · Built with Streamlit + LangChain + Claude AI
+</div>
+""", unsafe_allow_html=True)
