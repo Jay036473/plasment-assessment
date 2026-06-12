@@ -1,1 +1,22 @@
+1. The Four Key Components of a Structured Prompt
+While different frameworks exist, a highly effective, well-structured prompt generally consists of these four core elements:
 
+Instruction/Task: The specific action you want the AI to perform (e.g., "Summarize," "Translate," "Analyze").
+
+Context/Role: Background information or a specific persona that grounds the model's understanding (e.g., the target audience, the overarching goal, or acting as a specific expert).
+
+Input Data: The actual text, code, or information the model needs to process.
+
+Output Format/Constraints: The rules for how the final response should look (e.g., bullet points, JSON format, maximum word count, specific tone).
+
+2. The Missing Component in "Summarize this."
+This prompt is heavily missing Context and Output Constraints. While the Instruction ("Summarize") is present, the AI has no idea who the summary is for, how long it should be, or what format to use. Without formatting constraints (like "give me three bullet points") or context (like "explain this for a 5-year-old"), the model has to guess your intent, often leading to unhelpful results.
+
+3. The Effect of Assigning a Role
+Assigning a role (like "senior financial analyst") acts as a powerful context filter. It fundamentally changes the AI's tone, vocabulary, and perspective. Instead of giving a broad, generic response, the model will automatically adopt industry-specific terminology, prioritize relevant metrics (like ROI, margins, or risk assessment), and output text with the authoritative, analytical tone expected of a professional in that exact field.
+
+4. Why Structured Prompts Produce Consistent Outputs
+Structured prompts dramatically reduce ambiguity. When a prompt is unstructured, the AI has an incredibly wide "solution space" and has to guess what you want, leading to varied results. By clearly defining the context, exact format, and providing examples, you narrow down its choices. When the model knows exactly what rules to follow, it relies less on randomness and delivers predictable, uniform results every time.
+
+5. The Cause of Inconsistent Outputs
+If a prompt produces wildly different results on the same input, it is most commonly missing strict Output Constraints and Examples (Few-Shot Prompting). Without explicit boundaries detailing exactly how the answer must be structured, the model has the creative freedom to present the answer differently on every run. Adding a clear example of what a perfect response looks like is the most effective way to eliminate this inconsistency.
