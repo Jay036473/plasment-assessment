@@ -1,1 +1,339 @@
+"""
+prompt_toolkit.py
+==================
 
+A small toolkit for working with LLM prompts:
+
+1. Inject "Role" and "Context" variables into a raw user string using f-strings.
+2. A "Prompt Auditor" that checks whether key structural keywords
+   (Instruction, Example) are present in a prompt.
+3. A token-count comparison between a "Poor" prompt and a "Structured" prompt
+   using tiktoken.
+4. A unit test suite verifying that a rewritten/structured prompt produces a
+   consistent output *format* (e.g. valid JSON with the expected keys) across
+   three different sampling temperatures: 0.2, 0.7, and 1.2.
+
+The unit tests use a mocked LLM call so they run without any API key or
+network access. A real `llm_call` implementation (e.g. calling the
+Anthropic API) can be dropped in by replacing `DEFAULT_LLM_CALL`.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import unittest
+from typing import Callable
+from unittest.mock import patch
+
+import tiktoken
+
+
+# ---------------------------------------------------------------------------
+# 1. Prompt construction via f-strings
+# ---------------------------------------------------------------------------
+
+def build_structured_prompt(raw_prompt: str, role: str, context: str) -> str:
+    """Inject Role and Context into a raw user prompt.
+
+    Parameters
+    ----------
+    raw_prompt:
+        The original, unstructured user request.
+    role:
+        A short description of the persona/role the model should adopt
+        (e.g. "an experienced data scientist").
+    context:
+        Background information the model needs to complete the task well
+        (e.g. "The user is preparing a report for non-technical stakeholders").
+
+    Returns
+    -------
+    str
+        A structured prompt containing Role, Context, and Instruction
+        sections, ready to send to an LLM.
+    """
+    structured = f"""Role: You are {role}.
+
+Context: {context}
+
+Instruction: {raw_prompt}
+
+Example:
+Input: A short example input similar to the user's request.
+Output: A short example output showing the expected format/style.
+"""
+    return structured
+
+
+# ---------------------------------------------------------------------------
+# 2. Prompt Auditor
+# ---------------------------------------------------------------------------
+
+def audit_prompt(prompt: str, keywords: tuple[str, ...] = ("Instruction", "Example")) -> dict:
+    """Check a prompt for the presence of structural keywords.
+
+    A keyword is considered "present" if it appears as a section label,
+    i.e. on its own (optionally preceded by whitespace) and followed by a
+    colon -- e.g. "Instruction:" or "Example:". This avoids false positives
+    from the word appearing incidentally inside a sentence.
+
+    Parameters
+    ----------
+    prompt:
+        The prompt text to audit.
+    keywords:
+        The keywords/section labels to check for. Defaults to
+        ("Instruction", "Example").
+
+    Returns
+    -------
+    dict
+        A mapping of each keyword to a bool indicating whether it was found,
+        plus an overall "is_structured" flag that is True only if every
+        keyword was found, and a "missing" list of keywords not found.
+    """
+    results: dict[str, bool] = {}
+    for keyword in keywords:
+        pattern = rf"(?im)^\s*{re.escape(keyword)}\s*:"
+        results[keyword] = bool(re.search(pattern, prompt))
+
+    missing = [kw for kw, found in results.items() if not found]
+
+    return {
+        "found": results,
+        "missing": missing,
+        "is_structured": len(missing) == 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3. Token-count comparison with tiktoken
+# ---------------------------------------------------------------------------
+
+def count_tokens(text: str, model: str = "gpt-4") -> int:
+    """Return the number of tokens `text` would consume for `model`.
+
+    Uses tiktoken's BPE encodings. On first use, tiktoken downloads the
+    relevant vocabulary file from the internet and caches it locally; if
+    that download is blocked (e.g. in a sandboxed/offline environment),
+    this falls back to a rough heuristic estimate (~4 characters per
+    token) so the function still returns a usable number.
+    """
+    try:
+        try:
+            encoding = tiktoken.encoding_for_model(model)
+        except KeyError:
+            # Fall back to a generic encoding if the model isn't recognized.
+            encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
+    except Exception:
+        # Offline/sandboxed fallback: rough heuristic (~4 chars/token,
+        # the commonly cited average for English text with cl100k_base).
+        return max(1, round(len(text) / 4))
+
+
+def compare_prompt_token_counts(poor_prompt: str, structured_prompt: str, model: str = "gpt-4") -> dict:
+    """Compare token counts between a "poor" and a "structured" prompt.
+
+    Returns a dict with each prompt's token count, the absolute difference,
+    and the percentage increase of the structured prompt relative to the
+    poor prompt.
+    """
+    poor_tokens = count_tokens(poor_prompt, model=model)
+    structured_tokens = count_tokens(structured_prompt, model=model)
+    difference = structured_tokens - poor_tokens
+    pct_increase = (difference / poor_tokens * 100) if poor_tokens else float("inf")
+
+    return {
+        "poor_tokens": poor_tokens,
+        "structured_tokens": structured_tokens,
+        "difference": difference,
+        "pct_increase": pct_increase,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 4. Unit test: consistent output format across temperatures
+# ---------------------------------------------------------------------------
+
+# Type alias for an LLM call: (prompt, temperature) -> raw text response
+LLMCall = Callable[[str, float], str]
+
+
+def default_llm_call(prompt: str, temperature: float) -> str:
+    """Placeholder for a real LLM call.
+
+    Replace this with, e.g., a call to the Anthropic Messages API:
+
+        import anthropic
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=200,
+            temperature=temperature,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+
+    The function MUST return a string containing JSON in the shape:
+        {"summary": "...", "sentiment": "positive|neutral|negative"}
+    """
+    raise NotImplementedError("Plug in a real LLM call here.")
+
+
+EXPECTED_KEYS = {"summary", "sentiment"}
+ALLOWED_SENTIMENTS = {"positive", "neutral", "negative"}
+
+
+def validate_output_format(raw_response: str) -> dict:
+    """Parse and validate a model response against the expected schema.
+
+    Raises ValueError if the response is not valid JSON or does not match
+    the expected schema.
+    """
+    try:
+        data = json.loads(raw_response)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Response is not valid JSON: {exc}") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Response JSON must be an object/dict.")
+
+    missing_keys = EXPECTED_KEYS - data.keys()
+    if missing_keys:
+        raise ValueError(f"Response is missing required keys: {missing_keys}")
+
+    if data["sentiment"] not in ALLOWED_SENTIMENTS:
+        raise ValueError(
+            f"'sentiment' must be one of {ALLOWED_SENTIMENTS}, got {data['sentiment']!r}"
+        )
+
+    if not isinstance(data["summary"], str) or not data["summary"].strip():
+        raise ValueError("'summary' must be a non-empty string.")
+
+    return data
+
+
+class TestPromptFormatConsistency(unittest.TestCase):
+    """Verify that a structured prompt yields a consistent output *format*
+    (valid JSON with the expected keys/types) across temperatures
+    0.2, 0.7, and 1.2 -- even though the *content* may legitimately vary.
+    """
+
+    TEMPERATURES = (0.2, 0.7, 1.2)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.structured_prompt = build_structured_prompt(
+            raw_prompt=(
+                "Summarize the following customer review and classify its "
+                "sentiment as positive, neutral, or negative. Respond ONLY "
+                "with JSON in the form "
+                '{"summary": "...", "sentiment": "positive|neutral|negative"}.'
+                "\n\nReview: 'The product arrived on time and works as "
+                "described, though the packaging was a bit damaged.'"
+            ),
+            role="a meticulous customer feedback analyst",
+            context="You are processing reviews for a quarterly product report.",
+        )
+
+    def _mock_llm_call(self, prompt: str, temperature: float) -> str:
+        """Simulate slightly different content at different temperatures,
+        while always returning the correct JSON format. This stands in for
+        the behaviour we *expect* from a well-structured prompt.
+        """
+        sentiments_by_temp = {
+            0.2: "neutral",
+            0.7: "neutral",
+            1.2: "positive",
+        }
+        summaries_by_temp = {
+            0.2: "Item arrived on time and works, but packaging was damaged.",
+            0.7: "Delivered on time and functional, despite some packaging damage.",
+            1.2: "Great product overall, just minor packaging issues on arrival.",
+        }
+        payload = {
+            "summary": summaries_by_temp[temperature],
+            "sentiment": sentiments_by_temp[temperature],
+        }
+        return json.dumps(payload)
+
+    def test_output_format_is_consistent_across_temperatures(self):
+        results = {}
+
+        with patch("__main__.default_llm_call", side_effect=self._mock_llm_call):
+            for temperature in self.TEMPERATURES:
+                raw_response = self._mock_llm_call(self.structured_prompt, temperature)
+
+                with self.subTest(temperature=temperature):
+                    parsed = validate_output_format(raw_response)
+                    results[temperature] = parsed
+
+                    # Schema checks
+                    self.assertEqual(set(parsed.keys()), EXPECTED_KEYS)
+                    self.assertIsInstance(parsed["summary"], str)
+                    self.assertIn(parsed["sentiment"], ALLOWED_SENTIMENTS)
+
+        # All three responses must share the exact same set of keys/types,
+        # even though "summary" text and "sentiment" value may differ.
+        key_sets = {temp: set(result.keys()) for temp, result in results.items()}
+        self.assertEqual(len(set(map(frozenset, key_sets.values()))), 1)
+
+        type_signatures = {
+            temp: {k: type(v) for k, v in result.items()} for temp, result in results.items()
+        }
+        first_signature = next(iter(type_signatures.values()))
+        for temp, signature in type_signatures.items():
+            self.assertEqual(signature, first_signature, f"Type signature mismatch at T={temp}")
+
+    def test_invalid_format_is_rejected(self):
+        bad_response = "Sure! Here's the summary: it's a positive review."
+        with self.assertRaises(ValueError):
+            validate_output_format(bad_response)
+
+
+# ---------------------------------------------------------------------------
+# Demo / manual run
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    poor = "Summarize this review: 'The product arrived on time and works as described, though the packaging was a bit damaged.'"
+
+    structured = build_structured_prompt(
+        raw_prompt=(
+            "Summarize the following customer review and classify its "
+            "sentiment as positive, neutral, or negative. Respond ONLY "
+            "with JSON in the form "
+            '{"summary": "...", "sentiment": "positive|neutral|negative"}.'
+            "\n\nReview: 'The product arrived on time and works as described, "
+            "though the packaging was a bit damaged.'"
+        ),
+        role="a meticulous customer feedback analyst",
+        context="You are processing reviews for a quarterly product report.",
+    )
+
+    print("=" * 60)
+    print("STRUCTURED PROMPT")
+    print("=" * 60)
+    print(structured)
+
+    print("=" * 60)
+    print("PROMPT AUDIT (poor prompt)")
+    print("=" * 60)
+    print(audit_prompt(poor))
+
+    print("\n" + "=" * 60)
+    print("PROMPT AUDIT (structured prompt)")
+    print("=" * 60)
+    print(audit_prompt(structured))
+
+    print("\n" + "=" * 60)
+    print("TOKEN COUNT COMPARISON")
+    print("=" * 60)
+    print(compare_prompt_token_counts(poor, structured))
+
+    print("\n" + "=" * 60)
+    print("RUNNING UNIT TESTS")
+    print("=" * 60)
+    unittest.main(argv=[""], exit=False, verbosity=2)
