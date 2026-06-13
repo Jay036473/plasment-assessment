@@ -1,1 +1,278 @@
 
+
+import os
+
+# Set your OpenAI API key here (or use environment variable)
+os.environ["OPENAI_API_KEY"] = "your-openai-api-key-here"
+
+# QUESTION 1: RAG Pipeline using PyPDFLoader + ChromaDB
+
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.chains import RetrievalQA
+
+
+def rag_pipeline(pdf_path: str, query: str) -> str:
+    """
+    RAG Pipeline:
+    1. Load PDF corporate policy document
+    2. Split into chunks
+    3. Store in ChromaDB vector store
+    4. Retrieve relevant chunks and answer query using LLM
+    """
+    # Step 1: Load PDF
+    loader = PyPDFLoader(pdf_path)
+    documents = loader.load()
+
+    # Step 2: Split documents into chunks
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200
+    )
+    chunks = splitter.split_documents(documents)
+
+    # Step 3: Create ChromaDB vector store
+    embeddings = OpenAIEmbeddings()
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        persist_directory="./chroma_db"   # saves to disk
+    )
+
+    # Step 4: Build retrieval chain
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+    qa_chain = RetrievalQA.from_chain_type(
+        llm=llm,
+        chain_type="stuff",
+        retriever=vectorstore.as_retriever(search_kwargs={"k": 4})
+    )
+
+    # Step 5: Run semantic search query
+    result = qa_chain.invoke({"query": query})
+    return result["result"]
+
+# QUESTION 2: Autonomous Agent with DuckDuckGo Search + LLM Math Tools
+
+from langchain.agents import initialize_agent, AgentType
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain.agents import load_tools
+
+def autonomous_agent(question: str) -> str:
+    """
+    Autonomous Agent:
+    - DuckDuckGoSearchRun: searches the internet for current information
+    - llm-math: solves math calculations step-by-step
+    - Agent decides which tool to use automatically
+    """
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+    # Tool 1: DuckDuckGo web search
+    search_tool = DuckDuckGoSearchRun()
+
+    # Tool 2: LLM Math (uses numexpr for calculations)
+    math_tools = load_tools(["llm-math"], llm=llm)
+
+    # Combine all tools
+    tools = [search_tool] + math_tools
+
+    # Initialize agent (ZERO_SHOT_REACT_DESCRIPTION = ReAct framework)
+    agent = initialize_agent(
+        tools=tools,
+        llm=llm,
+        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True,          # shows reasoning steps
+        handle_parsing_errors=True,
+        max_iterations=6
+    )
+
+    # Run multi-step query
+    result = agent.invoke({"input": question})
+    return result["output"]
+
+
+# =============================================================================
+# QUESTION 3: FastAPI Chatbot with ConversationSummaryBufferMemory
+# =============================================================================
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+from langchain.memory import ConversationSummaryBufferMemory
+from langchain.chains import ConversationChain
+
+# Global memory and chain (shared across requests for same session)
+_llm_for_memory = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.7)
+
+memory = ConversationSummaryBufferMemory(
+    llm=_llm_for_memory,
+    max_token_limit=500,       # keeps last N tokens in buffer
+    return_messages=True       # returns chat message format
+)
+
+conversation_chain = ConversationChain(
+    llm=_llm_for_memory,
+    memory=memory,
+    verbose=False
+)
+
+app = FastAPI(title="LangChain Chatbot with Memory")
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    summary: str
+
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_endpoint(request: ChatRequest):
+    """
+    POST /chat
+    Body: {"message": "your message here"}
+    
+    - ConversationSummaryBufferMemory keeps recent messages in buffer
+    - Once buffer is full, older messages are summarized (saves tokens)
+    - Long-term context is preserved via summaries
+    """
+    reply = conversation_chain.predict(input=request.message)
+    
+    # Get current memory summary
+    current_summary = memory.moving_summary_buffer or "No summary yet."
+    
+    return ChatResponse(reply=reply, summary=current_summary)
+
+
+@app.delete("/chat/reset")
+async def reset_memory():
+    """Clear conversation memory and start fresh."""
+    memory.clear()
+    return {"status": "Memory cleared successfully"}
+
+
+# =============================================================================
+# QUESTION 4: Self-Correction Chain with PydanticOutputParser + OutputFixingParser
+# =============================================================================
+
+import json
+from typing import List
+from pydantic import BaseModel as PydanticModel, Field, validator
+from langchain.output_parsers import PydanticOutputParser, OutputFixingParser
+from langchain.prompts import PromptTemplate
+
+
+# Define the strict JSON schema for marketing content
+class MarketingContent(PydanticModel):
+    headline: str = Field(description="Catchy headline, max 10 words")
+    tagline: str = Field(description="Short tagline, max 15 words")
+    features: List[str] = Field(description="List of exactly 3 product features")
+    call_to_action: str = Field(description="CTA button text, max 5 words")
+    target_audience: str = Field(description="Describe the ideal customer")
+    tone: str = Field(description="Content tone: professional/casual/urgent/friendly")
+
+    @validator("features")
+    def must_have_three_features(cls, v):
+        if len(v) != 3:
+            raise ValueError("features must contain exactly 3 items")
+        return v
+
+    @validator("headline")
+    def headline_word_limit(cls, v):
+        if len(v.split()) > 10:
+            raise ValueError("headline must be 10 words or fewer")
+        return v
+
+
+def self_correction_chain(product_description: str) -> MarketingContent:
+    """
+    Self-Correction Chain:
+    1. PydanticOutputParser: defines the expected JSON schema
+    2. LLM generates marketing content
+    3. If output is malformed, OutputFixingParser auto-corrects it
+    4. Returns validated MarketingContent object
+    """
+    llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0.8)
+
+    # Step 1: Create Pydantic parser with schema
+    pydantic_parser = PydanticOutputParser(pydantic_object=MarketingContent)
+
+    # Step 2: Wrap with OutputFixingParser for auto-correction
+    # If LLM output fails schema validation, this parser asks LLM to fix it
+    fixing_parser = OutputFixingParser.from_llm(
+        parser=pydantic_parser,
+        llm=llm,
+        max_retries=3              # retry up to 3 times before failing
+    )
+
+    # Step 3: Build prompt with format instructions
+    prompt = PromptTemplate(
+        template=(
+            "You are a professional marketing copywriter.\n"
+            "Create compelling marketing content for the following product:\n\n"
+            "{product}\n\n"
+            "Your response MUST follow this exact format:\n"
+            "{format_instructions}"
+        ),
+        input_variables=["product"],
+        partial_variables={
+            "format_instructions": pydantic_parser.get_format_instructions()
+        }
+    )
+
+    # Step 4: Build and run the chain
+    chain = prompt | llm | fixing_parser
+
+    result = chain.invoke({"product": product_description})
+    return result
+
+
+# =============================================================================
+# MAIN: Run all 4 examples
+# =============================================================================
+
+if __name__ == "__main__":
+
+    print("\n" + "="*60)
+    print("QUESTION 1: RAG Pipeline")
+    print("="*60)
+    # Note: Replace "company_policy.pdf" with your actual PDF path
+    try:
+        answer = rag_pipeline(
+            pdf_path="company_policy.pdf",
+            query="What is the company's remote work policy?"
+        )
+        print("RAG Answer:", answer)
+    except FileNotFoundError:
+        print("Place a PDF file named 'company_policy.pdf' and retry.")
+
+    print("\n" + "="*60)
+    print("QUESTION 2: Autonomous Agent")
+    print("="*60)
+    agent_answer = autonomous_agent(
+        "What is the current population of India? "
+        "If it grows at 0.9% per year, what will it be in 10 years?"
+    )
+    print("Agent Answer:", agent_answer)
+
+    print("\n" + "="*60)
+    print("QUESTION 3: FastAPI Chatbot")
+    print("="*60)
+    print("Start server with:  uvicorn langchain_all_questions:app --reload")
+    print("Then POST to:       http://localhost:8000/chat")
+    print('Body:               {"message": "Hello, who are you?"}')
+
+    print("\n" + "="*60)
+    print("QUESTION 4: Self-Correction Chain")
+    print("="*60)
+    content = self_correction_chain(
+        product_description=(
+            "EcoBottle Pro - A smart water bottle with temperature display, "
+            "hydration reminders, and BPA-free stainless steel body. "
+            "Keeps drinks cold 24h, hot 12h. Target: health-conscious adults."
+        )
+    )
+    print("Generated Marketing Content:")
+    print(json.dumps(content.dict(), indent=2))
