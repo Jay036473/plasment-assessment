@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -14,7 +13,7 @@ import pytesseract
 from PIL import Image
 import io
 
-# Tesseract નો પાથ (Windows માટે).
+# Path to Tesseract (for Windows).
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 # --- RAG & AI Libraries ---
@@ -30,7 +29,6 @@ from huggingface_hub import InferenceClient
 # ─────────────────────────────────────────────
 st.set_page_config(
     page_title="RAG Benchmarking Engine",
-    page_icon="🔬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -228,7 +226,7 @@ for key, default in {
 st.markdown("""
 <div class='hero-block'>
     <div class='hero-badge'>TOPS Technologies · RAG Assignment</div>
-    <div class='hero-title'>🔬 Prompt Quality Benchmarking Engine</div>
+    <div class='hero-title'>Prompt Quality Benchmarking Engine</div>
     <div class='hero-sub'>Compare Shallow vs. Deep prompt performance · Hallucination detection · Claude AI Chat Assistant</div>
 </div>
 """, unsafe_allow_html=True)
@@ -237,10 +235,10 @@ st.markdown("""
 # SIDEBAR
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## ⚙️ Configuration")
+    st.markdown("## Configuration")
     st.markdown("---")
 
-    st.markdown("**🔑 API Keys**")
+    st.markdown("**API Keys**")
 
     hf_token = st.text_input(
         "Hugging Face Token",
@@ -253,16 +251,16 @@ with st.sidebar:
         "Anthropic API Key",
         type="password",
         placeholder="sk-ant-xxxxxxxxxxxxxxxx",
-        help="console.anthropic.com → Claude Chat Bot માટે"
+        help="console.anthropic.com → for the Claude Chat Bot"
     )
 
     st.markdown("---")
-    st.markdown("**🤖 Select LLM (2 Options)**")
+    st.markdown("**Select LLM (2 Options)**")
 
-    # --- NEW MODEL OPTIONS (QWEN INSTEAD OF ZEPHYR) ---
+    # --- TEXT GENERATION MODEL OPTIONS ---
     MODEL_OPTIONS = {
-        "Mistral 7B Instruct ⚡": "mistralai/Mistral-7B-Instruct-v0.3",
-        "Qwen 2.5 (7B) 🚀": "Qwen/Qwen2.5-7B-Instruct"
+        "DeepSeek V4 Pro": "deepseek-ai/DeepSeek-V4-Pro",
+        "North Mini Code 1.0": "CohereLabs/North-Mini-Code-1.0"
     }
     selected_display = st.selectbox(
         "Choose generation model",
@@ -272,7 +270,7 @@ with st.sidebar:
     selected_model_id = MODEL_OPTIONS[selected_display]
 
     st.markdown("---")
-    st.markdown("**🎛️ Eval Parameters**")
+    st.markdown("**Eval Parameters**")
     similarity_threshold = st.slider(
         "Hallucination Detection Threshold",
         min_value=0.0, max_value=1.0, value=0.65, step=0.05,
@@ -283,9 +281,9 @@ with st.sidebar:
     st.markdown("""
     <div style='font-size:0.76rem; color:#475569; line-height:1.6;'>
     <b style='color:#64748B'>HF Models Info</b><br>
-    • Mistral 7B – fast instruction model<br>
-    • Qwen 2.5 7B – highly advanced & capable<br>
-    • Both free on HF Inference API<br>
+    • DeepSeek V4 Pro – 1.6T parameter (49B active) MoE model, very large<br>
+    • North Mini Code 1.0 – 30B parameter (3B active) agentic coding model<br>
+    • Both require a HuggingFace Inference Provider that hosts them<br>
     • Token: huggingface.co/settings/tokens
     </div>
     """, unsafe_allow_html=True)
@@ -319,11 +317,11 @@ def calculate_similarity(text1: str, text2: str, embedding_model) -> float:
 
 
 def hf_generate(model_id: str, prompt: str, hf_token: str, max_tokens: int = 400) -> str:
-    """HuggingFace InferenceClient — updated for conversational task."""
+    """HuggingFace InferenceClient — uses the conversational (chat) format."""
     try:
         client = InferenceClient(model=model_id, token=hf_token)
 
-        # --- NEW CODE: Use conversational (chat) format ---
+        # Use conversational (chat) format
         messages = [{"role": "user", "content": prompt}]
 
         response = client.chat_completion(
@@ -333,18 +331,18 @@ def hf_generate(model_id: str, prompt: str, hf_token: str, max_tokens: int = 400
         )
 
         text = response.choices[0].message.content
-        return text.strip() if text else "⚠️ Model returned empty response."
+        return text.strip() if text else "Model returned an empty response."
 
     except Exception as e:
         err = str(e)
         if "401" in err or "unauthorized" in err.lower():
-            return "❌ Invalid HF Token. Check huggingface.co/settings/tokens"
+            return "Invalid HF Token. Check huggingface.co/settings/tokens"
         elif "503" in err or "loading" in err.lower():
-            return "⏳ Model loading... 30 seconds wait કરીને ફરી try કરો."
+            return "Model is loading... please wait 30 seconds and try again."
         elif "429" in err or "rate" in err.lower():
-            return "⏳ Rate limit. થોડી seconds wait કરો."
+            return "Rate limit reached. Please wait a few seconds and try again."
         else:
-            return f"❌ HF Error: {err[:200]}"
+            return f"HF Error: {err[:200]}"
 
 
 def claude_chat_response(messages: list, context: str, anthropic_key: str) -> str:
@@ -377,7 +375,7 @@ def claude_chat_response(messages: list, context: str, anthropic_key: str) -> st
     if response.content:
         return response.content[0].text
     else:
-        return "⚠️ Claude તરફથી કોઈ જવાબ મળ્યો નથી."
+        return "No response was received from Claude."
 
 
 def score_to_pill(score: float, threshold: float) -> str:
@@ -393,7 +391,7 @@ def score_to_pill(score: float, threshold: float) -> str:
 # STEP 1 – DOCUMENT INGESTION (WITH OCR SUPPORT)
 # ─────────────────────────────────────────────
 st.markdown("<div class='section-label'>Step 01</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-title'>📄 Document Ingestion Pipeline</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Document Ingestion Pipeline</div>", unsafe_allow_html=True)
 
 uploaded_file = st.file_uploader(
     "Upload your reference PDF document",
@@ -407,7 +405,7 @@ if uploaded_file is not None:
 
     num_pages = 0
 
-    with st.spinner("⚙️ Extracting text layers from PDF..."):
+    with st.spinner("Extracting text layers from PDF..."):
         pdf_reader = pypdf.PdfReader(BytesIO(pdf_bytes))
         num_pages = len(pdf_reader.pages)
         full_text = ""
@@ -416,49 +414,49 @@ if uploaded_file is not None:
             if t:
                 full_text += t + "\n"
 
-    # --- NEW OCR LOGIC ---
-    # જો pypdf ને ટેક્સ્ટ ના મળે (એટલે કે ઈમેજ વાળી PDF હોય) તો OCR ચાલુ કરો
+    # --- OCR FALLBACK LOGIC ---
+    # If pypdf could not find any text (i.e. it's an image-based/scanned PDF), run OCR
     if len(full_text.strip()) < 50:
         st.info(
-            "ℹ️ ડિજિટલ ટેક્સ્ટ મળ્યું નથી. સ્કેન કરેલી ઈમેજ PDF હોવાથી OCR ચાલુ થઈ રહ્યું છે... (આમાં થોડો સમય લાગી શકે છે)")
+            "No digital text was found. Since this appears to be a scanned image PDF, OCR is starting... (this may take a little while)")
 
         try:
             full_text = ""
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             num_pages = len(doc)
 
-            # પ્રોગ્રેસ બાર બતાવવા માટે
+            # To display a progress bar
             progress_bar = st.progress(0)
             status_text = st.empty()
 
             for page_num in range(len(doc)):
-                status_text.text(f"🔍 Reading image page {page_num + 1} of {len(doc)}...")
+                status_text.text(f"Reading image page {page_num + 1} of {len(doc)}...")
                 page = doc.load_page(page_num)
                 pix = page.get_pixmap()
 
-                # Pixmap ને PIL Image માં ફેરવો
+                # Convert Pixmap to a PIL Image
                 img = Image.open(io.BytesIO(pix.tobytes("png")))
 
-                # OCR દ્વારા ઈમેજમાંથી ટેક્સ્ટ કાઢો
+                # Extract text from the image using OCR
                 extracted_text = pytesseract.image_to_string(img)
                 full_text += extracted_text + "\n"
 
-                # પ્રોગ્રેસ બાર અપડેટ કરો
+                # Update progress bar
                 progress_bar.progress((page_num + 1) / len(doc))
 
-            status_text.empty()  # પ્રોગ્રેસ ટેક્સ્ટ કાઢી નાખો
+            status_text.empty()  # Clear the progress status text
             progress_bar.empty()
 
         except Exception as e:
-            st.error(f"❌ OCR ફેલ થયું. ખાતરી કરો કે કમ્પ્યુટરમાં Tesseract-OCR ઇન્સ્ટોલ કરેલું છે. એરર: {e}")
+            st.error(f"OCR failed. Make sure Tesseract-OCR is installed on this computer. Error: {e}")
             st.stop()
 
     if not full_text.strip():
         st.error(
-            "❌ આ PDF માંથી કોઈ ટેક્સ્ટ વાંચી શકાયું નથી. કૃપા કરીને બીજી ફાઈલ અપલોડ કરો.")
+            "No text could be read from this PDF. Please upload a different file.")
         st.stop()
 
-    with st.spinner("🔗 Building FAISS vector index..."):
+    with st.spinner("Building FAISS vector index..."):
         splitter = RecursiveCharacterTextSplitter(chunk_size=600, chunk_overlap=100)
         chunks = splitter.split_text(full_text)
         hf_emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -476,7 +474,7 @@ if uploaded_file is not None:
     with col_c:
         st.markdown(f"""<div class='chip'>Vector Chunks<b>{len(chunks)}</b></div>""", unsafe_allow_html=True)
 
-    st.success("✅ Vector database ready. System online for RAG queries.")
+    st.success("Vector database ready. System online for RAG queries.")
 
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
@@ -484,7 +482,7 @@ if uploaded_file is not None:
     # STEP 2 – BENCHMARK ARENA
     # ─────────────────────────────────────────────
     st.markdown("<div class='section-label'>Step 02</div>", unsafe_allow_html=True)
-    st.markdown("<div class='section-title'>⚗️ Benchmarking & Evaluation Arena</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Benchmarking & Evaluation Arena</div>", unsafe_allow_html=True)
 
     user_query = st.text_input(
         "Enter a query to benchmark:",
@@ -494,15 +492,15 @@ if uploaded_file is not None:
 
     run_col, _ = st.columns([1, 3])
     with run_col:
-        run_btn = st.button("▶ Run Evaluation Benchmark", use_container_width=True, type="primary")
+        run_btn = st.button("Run Evaluation Benchmark", use_container_width=True, type="primary")
 
     if run_btn:
         if not hf_token:
-            st.error("❌ Please enter your Hugging Face Token in the sidebar.")
+            st.error("Please enter your Hugging Face Token in the sidebar.")
         elif not user_query.strip():
-            st.error("❌ Please enter a query before running the benchmark.")
+            st.error("Please enter a query before running the benchmark.")
         else:
-            with st.spinner("🔄 Executing RAG pipeline & quality evaluation..."):
+            with st.spinner("Executing RAG pipeline & quality evaluation..."):
                 start = time.time()
 
                 # Retrieve context
@@ -544,31 +542,31 @@ if uploaded_file is not None:
             col1, col2 = st.columns(2)
 
             with col1:
-                st.markdown("#### 🔵 Shallow Prompt")
+                st.markdown("#### Shallow Prompt")
                 st.markdown(f"<div class='eval-card'>", unsafe_allow_html=True)
                 st.caption(f"**Prompt:** `{user_query}`")
                 st.text_area("Output:", value=shallow_output, height=190, disabled=True, key="shallow_out")
                 pill = score_to_pill(score_s, similarity_threshold)
                 st.markdown(f"**Semantic Alignment:** {pill}", unsafe_allow_html=True)
                 if flag_s:
-                    st.markdown("<div class='status-bad'>⚠️ Hallucination Detected – Score below threshold</div>",
+                    st.markdown("<div class='status-bad'>Hallucination Detected – Score below threshold</div>",
                                 unsafe_allow_html=True)
                 else:
-                    st.markdown("<div class='status-ok'>✅ Contextually Verified</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='status-ok'>Contextually Verified</div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with col2:
-                st.markdown("#### 🟣 Engineered Deep Prompt")
+                st.markdown("#### Engineered Deep Prompt")
                 st.markdown(f"<div class='eval-card'>", unsafe_allow_html=True)
                 st.caption("**Auto-rewritten with role, constraints & output format**")
                 st.text_area("Output:", value=deep_output, height=190, disabled=True, key="deep_out")
                 pill2 = score_to_pill(score_d, similarity_threshold)
                 st.markdown(f"**Semantic Alignment:** {pill2}", unsafe_allow_html=True)
                 if flag_d:
-                    st.markdown("<div class='status-warn'>⚠️ Hallucination Risk – Verify output manually</div>",
+                    st.markdown("<div class='status-warn'>Hallucination Risk – Verify output manually</div>",
                                 unsafe_allow_html=True)
                 else:
-                    st.markdown("<div class='status-ok'>✅ Contextually Verified</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='status-ok'>Contextually Verified</div>", unsafe_allow_html=True)
                 st.markdown("</div>", unsafe_allow_html=True)
 
             delta = score_d - score_s
@@ -576,7 +574,7 @@ if uploaded_file is not None:
             color = "#22C55E" if delta >= 0 else "#EF4444"
             st.markdown(
                 f"<div style='text-align:center; color:{color}; font-size:0.9rem; margin-top:8px;'>"
-                f"⏱ Pipeline latency: <b>{latency}s</b> &nbsp;|&nbsp; Score Δ (Deep−Shallow): <b>{delta_str}</b>"
+                f"Pipeline latency: <b>{latency}s</b> &nbsp;|&nbsp; Score Δ (Deep−Shallow): <b>{delta_str}</b>"
                 f"</div>",
                 unsafe_allow_html=True
             )
@@ -587,7 +585,7 @@ if uploaded_file is not None:
     if st.session_state.metrics_log:
         st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
         st.markdown("<div class='section-label'>Step 03</div>", unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>📊 Historical Benchmark Metrics</div>", unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>Historical Benchmark Metrics</div>", unsafe_allow_html=True)
 
         df = pd.DataFrame(st.session_state.metrics_log)
         st.dataframe(df, use_container_width=True, hide_index=True)
@@ -596,24 +594,24 @@ if uploaded_file is not None:
         df.to_csv(csv_buf, index=False)
 
         st.download_button(
-            label="⬇️ Download Metrics CSV",
+            label="Download Metrics CSV",
             data=csv_buf.getvalue(),
             file_name="rag_benchmark_metrics.csv",
             mime="text/csv"
         )
 
 else:
-    st.info("📂 Please upload a PDF document above to begin.")
+    st.info("Please upload a PDF document above to begin.")
 
 # ─────────────────────────────────────────────
 # STEP 4 – CLAUDE CHAT BOT (ALWAYS VISIBLE)
 # ─────────────────────────────────────────────
 st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 st.markdown("<div class='section-label'>Step 04</div>", unsafe_allow_html=True)
-st.markdown("<div class='section-title'>💬 Claude AI Chat Assistant</div>", unsafe_allow_html=True)
+st.markdown("<div class='section-title'>Claude AI Chat Assistant</div>", unsafe_allow_html=True)
 
 if not anthropic_key:
-    st.warning("🔑 Enter your Anthropic API Key in the sidebar to activate the Chat Assistant.")
+    st.warning("Enter your Anthropic API Key in the sidebar to activate the Chat Assistant.")
 else:
     # Chat header
     st.markdown("""
@@ -633,16 +631,15 @@ else:
         chat_html = "<div class='chat-body'>"
         for msg in st.session_state.chat_history:
             if msg["role"] == "user":
-                chat_html += f"<div class='bubble-user'>👤 {msg['content']}</div>"
+                chat_html += f"<div class='bubble-user'>{msg['content']}</div>"
             else:
                 safe_content = msg['content'].replace('\n', '<br>')
-                chat_html += f"<div class='bubble-bot'>🤖 {safe_content}</div>"
+                chat_html += f"<div class='bubble-bot'>{safe_content}</div>"
         chat_html += "</div>"
         st.markdown(chat_html, unsafe_allow_html=True)
     else:
         st.markdown("""
         <div style='background:#1E293B; border:1px solid #334155; border-radius:12px; padding:24px; text-align:center; color:#475569; margin-top:4px;'>
-            <div style='font-size:2rem; margin-bottom:8px;'>🤖</div>
             <div style='font-size:0.9rem;'>Ask anything about your document or RAG concepts!<br>
             <span style='font-size:0.78rem; color:#334155;'>e.g. "Summarize the document" · "What is RAG?" · "Explain prompt engineering"</span>
             </div>
@@ -659,11 +656,11 @@ else:
             key="chat_input_box"
         )
     with chat_col2:
-        send_btn = st.button("Send ➤", use_container_width=True)
+        send_btn = st.button("Send", use_container_width=True)
 
     btn_col1, btn_col2 = st.columns([1, 5])
     with btn_col1:
-        if st.button("🗑️ Clear Chat", use_container_width=True):
+        if st.button("Clear Chat", use_container_width=True):
             st.session_state.chat_history = []
             st.rerun()
 
@@ -671,7 +668,7 @@ else:
     if send_btn and user_chat_input.strip():
         st.session_state.chat_history.append({"role": "user", "content": user_chat_input.strip()})
 
-        with st.spinner("🤔 Claude is thinking..."):
+        with st.spinner("Claude is thinking..."):
             try:
                 reply = claude_chat_response(
                     st.session_state.chat_history,
@@ -703,7 +700,7 @@ else:
         with col:
             if st.button(sugg, key=f"sugg_{i}", use_container_width=True):
                 st.session_state.chat_history.append({"role": "user", "content": sugg})
-                with st.spinner("🤔 Thinking..."):
+                with st.spinner("Thinking..."):
                     try:
                         reply = claude_chat_response(st.session_state.chat_history, context_for_chat, anthropic_key)
                         st.session_state.chat_history.append({"role": "assistant", "content": reply})
