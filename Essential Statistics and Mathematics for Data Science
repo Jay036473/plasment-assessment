@@ -1,1 +1,113 @@
 
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# PART 1: NUMPY SOLUTIONS
+
+print("--- NUMPY SOLUTIONS ---")
+
+# Q.1: Convert a 1D array to a 2D array with 2 rows
+arr_1d = np.arange(10)
+arr_2d = arr_1d.reshape(2, -1)
+print(f"Q1 (2D Array):\n{arr_2d}\n")
+
+# Q.2: Get the common items between a and b
+a_q2 = np.array([1, 2, 3, 2, 3, 4, 3, 4, 5, 6])
+b_q2 = np.array([7, 2, 10, 2, 7, 4, 9, 4, 9, 8])
+common_items = np.intersect1d(a_q2, b_q2)
+print(f"Q2 (Common items): {common_items}\n")
+
+# Q.3: Get all items between 5 and 10 from a
+a_q3 = np.array([2, 6, 1, 9, 10, 3, 27])
+items_between = a_q3[(a_q3 >= 5) & (a_q3 <= 10)]
+print(f"Q3 (Items between 5 and 10): {items_between}\n")
+
+# Q.4: Limit the number of items printed to a maximum of 6 elements
+a_q4 = np.arange(15)
+np.set_printoptions(threshold=6)
+print(f"Q4 (Limited print):\n{a_q4}\n")
+
+# PART 2: PANDAS SOLUTIONS
+
+print("--- PANDAS SOLUTIONS ---")
+
+# 1. Compute min, 25th percentile, median, 75th, and max
+ser = pd.Series(np.random.normal(10, 5, 25))
+stats = ser.describe(percentiles=[.25, .5, .75])
+print(f"P1 (Series Stats):\n{stats[['min', '25%', '50%', '75%', 'max']]}\n")
+
+# 2 & 3. Create a Pandas Data Frame with five rows and three columns using NumPy
+df = pd.DataFrame(np.random.randint(1, 100, size=(5, 3)), columns=['Col1', 'Col2', 'Col3'])
+print(f"P3 (5x3 DataFrame):\n{df}\n")
+
+# 4. Default behavior for labels
+# Answer: For a NumPy-based DataFrame, the default row and column labels are integers starting from 0.
+
+# 6. Show number of rows and columns
+print(f"P6 (Shape): {df.shape}")
+
+# 7. Show first few rows
+print(f"P7 (Head):\n{df.head(2)}\n")
+
+# 8. Type of a single column selection
+# Answer: Selecting a single column from a DataFrame returns a <class 'pandas.core.series.Series'>.
+
+
+# PART 3: VISUALIZATION SOLUTIONS
+
+# 9. Line Plot
+x_q9 = [3, 4, 5, 6]
+y_q9 = [1.5, 2, 2.5, 3]
+plt.figure(figsize=(10, 6))
+plt.subplot(2, 2, 1)
+plt.plot(x_q9, y_q9)
+plt.title("Q9: Line Plot")
+plt.xlabel("X")
+plt.ylabel("Y")
+
+# 10. Multi-function Plot
+x_q10 = np.arange(0, 6.3, 0.3)
+plt.subplot(2, 2, 2)
+plt.plot(x_q10, x_q10, "ro", label="x")
+plt.plot(x_q10, x_q10**2, "bs", label="x^2")
+plt.plot(x_q10, x_q10**3, "g", label="x^3")
+plt.plot(x_q10, x_q10**4, ":", label="x^4")
+plt.axis([0, 6, 0, 125])
+plt.title("Q10: Polynomial Styles")
+plt.legend()
+
+# 11. Bar Plot: Height Comparison
+heights = [179, 155, 191, 152, 188, 177]
+names = ['QA', 'WB', 'EC', 'RD', 'TE', 'YF']
+plt.subplot(2, 2, 3)
+plt.bar(names, heights, color='skyblue')
+plt.title("Q11: Height Comparison")
+
+# 12. Histogram: Normal Distribution
+x_q12 = np.random.randn(100000)
+plt.subplot(2, 2, 4)
+plt.hist(x_q12, bins=50, color='orange', alpha=0.7) # Using 50 bins as requested to observe change
+plt.title("Q12: Normal Distribution (50 bins)")
+
+plt.tight_layout()
+plt.show()
+
+# PART 4: THEORY QUESTIONS
+
+Q13. Features of TensorFlow:
+- Open-source library for numerical computation and large-scale machine learning.
+- Flexible architecture (runs on CPU, GPU, and TPU).
+- Auto-differentiation capabilities for gradient-based optimization.
+- Robust ecosystem (TensorBoard for visualization, TensorFlow Lite for mobile).
+
+Q14. Limitations of TensorFlow:
+- Steep learning curve for beginners compared to Scikit-learn or Keras.
+- Debugging can be difficult due to its symbolic graph execution (though Eager Execution helps).
+- Higher memory usage and overhead for simple models.
+
+Q15. Supervised vs. Unsupervised Machine Learning:
+- Supervised Learning: The model is trained on labeled data (input and the correct output). 
+  Goal is to predict outcomes for new data. Examples: Linear Regression, Classification.
+- Unsupervised Learning: The model works on unlabeled data and attempts to find hidden 
+  structures or patterns. Goal is to describe the data. Examples: K-Means Clustering, PCA.
