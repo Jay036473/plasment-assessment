@@ -1,1 +1,137 @@
+import cv2
+import numpy as np
+import math
 
+# ==========================================
+# Task 1: Load Image and Validate Structure
+# ==========================================
+# Please replace 'sample.jpg' with the actual name of your image file.
+image_path = 'sample.jpg'
+image = cv2.imread(image_path)
+
+# Check if the image was successfully loaded
+if image is None:
+    print("Error: Could not load the image. Please check the file path.")
+    exit()
+
+# Get the dimensions of the image
+height, width, channels = image.shape
+
+print("Task 1: Image Loaded Successfully")
+print("Image Structure (Height x Width x Channels):", height, "x", width, "x", channels)
+print("-" * 40)
+
+# ==========================================
+# Task 2: Resize using INTER_LINEAR and INTER_CUBIC
+# ==========================================
+# Double the size of the original image
+new_width = width * 2
+new_height = height * 2
+new_dimensions = (new_width, new_height)
+
+# Resize using both interpolation methods
+image_linear = cv2.resize(image, new_dimensions, interpolation=cv2.INTER_LINEAR)
+image_cubic = cv2.resize(image, new_dimensions, interpolation=cv2.INTER_CUBIC)
+
+# Calculate the pixel-level difference between the two methods
+# This creates an image showing exactly where the pixels differ
+pixel_difference = cv2.absdiff(image_linear, image_cubic)
+
+# Save the results to view them
+cv2.imwrite("task2_resized_linear.jpg", image_linear)
+cv2.imwrite("task2_resized_cubic.jpg", image_cubic)
+cv2.imwrite("task2_pixel_difference.jpg", pixel_difference)
+print("Task 2: Resizing complete. Saved resized images and their pixel difference.")
+print("-" * 40)
+
+# ==========================================
+# Task 3: Rotate 45 and 90 degrees without cropping
+# ==========================================
+def rotate_without_cropping(img, angle):
+    h, w = img.shape[:2]
+    
+    # Get the center of the image
+    center_x = w / 2
+    center_y = h / 2
+    
+    # Get the rotation matrix
+    rotation_matrix = cv2.getRotationMatrix2D((center_x, center_y), angle, 1.0)
+    
+    # Calculate the sine and cosine of the angle to find the new dimensions
+    angle_radians = math.radians(angle)
+    sin_val = abs(math.sin(angle_radians))
+    cos_val = abs(math.cos(angle_radians))
+    
+    # Calculate the new bounding dimensions
+    new_w = int((h * sin_val) + (w * cos_val))
+    new_h = int((h * cos_val) + (w * sin_val))
+    
+    # Adjust the rotation matrix to center the image in the new dimensions
+    rotation_matrix[0, 2] += (new_w / 2) - center_x
+    rotation_matrix[1, 2] += (new_h / 2) - center_y
+    
+    # Perform the actual rotation
+    rotated_img = cv2.warpAffine(img, rotation_matrix, (new_w, new_h))
+    return rotated_img
+
+# Apply the rotation function
+image_rotated_45 = rotate_without_cropping(image, 45)
+image_rotated_90 = rotate_without_cropping(image, 90)
+
+# Save the rotated images
+cv2.imwrite("task3_rotated_45.jpg", image_rotated_45)
+cv2.imwrite("task3_rotated_90.jpg", image_rotated_90)
+print("Task 3: Rotation complete. Saved 45-degree and 90-degree rotated images.")
+print("-" * 40)
+
+# ==========================================
+# Task 4: ROI Crop and Flipping
+# ==========================================
+# Define the Region of Interest (ROI) boundaries
+# Let's extract the middle 50% of the image
+start_y = int(height * 0.25)
+end_y = int(height * 0.75)
+start_x = int(width * 0.25)
+end_x = int(width * 0.75)
+
+# Crop the region
+roi_cropped = image[start_y:end_y, start_x:end_x]
+
+# Flip the cropped segment
+# 1 means flip horizontally, 0 means flip vertically
+roi_flipped_horizontal = cv2.flip(roi_cropped, 1)
+roi_flipped_vertical = cv2.flip(roi_cropped, 0)
+
+# Save the cropped and flipped images
+cv2.imwrite("task4_roi_cropped.jpg", roi_cropped)
+cv2.imwrite("task4_roi_flipped_horizontal.jpg", roi_flipped_horizontal)
+cv2.imwrite("task4_roi_flipped_vertical.jpg", roi_flipped_vertical)
+print("Task 4: ROI cropping and flipping complete. Saved results.")
+print("All tasks finished successfully!")
+import cv2
+
+# ==========================================
+# Task 5: Color-Space Conversion (BGR to Grayscale & HSV)
+# ==========================================
+
+# Replace 'sample.jpg' with your actual image file name
+image_path = 'sample.jpg'
+image_bgr = cv2.imread(image_path)
+
+# Check if the image was successfully loaded
+if image_bgr is None:
+    print("Error: Could not load the image. Please check the file path.")
+else:
+    # 1. Convert the BGR image to Grayscale
+    image_grayscale = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    
+    # 2. Convert the BGR image to HSV format
+    image_hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    
+    # Save the new images to your folder
+    cv2.imwrite("task5_format_grayscale.jpg", image_grayscale)
+    cv2.imwrite("task5_format_hsv.jpg", image_hsv)
+    
+    # Print a success message
+    print("Task 5: Color-space conversion is complete.")
+    print("Saved 'task5_format_grayscale.jpg' and 'task5_format_hsv.jpg' successfully.")
