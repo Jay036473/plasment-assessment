@@ -1,1 +1,183 @@
 
+import streamlit as st
+import cv2
+import numpy as np
+import io
+
+# App Configuration
+st.set_page_config(page_title="Image Normalizer & Pre-processor", layout="wide")
+st.title("Automated Image Normalizer & Pre-processor")
+st.markdown("Upload an image from your dataset to perform standard preprocessing steps.")
+
+
+# --- Helper Function for Download ---
+def create_download_button(image_bgr_or_gray, filename, button_text):
+    """OpenCV image ne PNG format ma download karva mate nu function"""
+    is_success, buffer = cv2.imencode(".png", image_bgr_or_gray)
+    if is_success:
+        io_buf = io.BytesIO(buffer)
+        st.download_button(
+            label=button_text,
+            data=io_buf,
+            file_name=filename,
+            mime="image/png"
+        )
+
+
+# 1. Load JPG and PNG images
+uploaded_file = st.sidebar.file_uploader("Upload Image (JPG/PNG)", type=['jpg', 'jpeg', 'png'])
+
+if uploaded_file is not None:
+    # Read the image using OpenCV
+    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
+    img_bgr = cv2.imdecode(file_bytes, 1)  # OpenCV always loads in BGR
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)  # For Streamlit display
+
+    st.sidebar.success("Image Loaded Successfully!")
+
+    # 2. Validate H × W × C
+    h, w, c = img_bgr.shape
+    st.sidebar.write("### Original Image Validation")
+    st.sidebar.write(f"**Height (H):** {h} px")
+    st.sidebar.write(f"**Width (W):** {w} px")
+    st.sidebar.write(f"**Channels (C):** {c}")
+
+    # Display Original Image
+    st.subheader("Original Image")
+    st.image(img_rgb, use_container_width=False, width=400)
+
+    st.markdown("---")
+
+    # ================= ROW 1 =================
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("1. Resize & Interpolation Comparison")
+        target_size = st.slider("Select Target Resolution (Square)", 128, 1024, 512, step=64)
+
+        # 3 & 4. Resize using INTER_LINEAR & INTER_CUBIC
+        img_linear = cv2.resize(img_bgr, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
+        img_cubic = cv2.resize(img_bgr, (target_size, target_size), interpolation=cv2.INTER_CUBIC)
+
+        sub_col1, sub_col2 = st.columns(2)
+        sub_col1.image(cv2.cvtColor(img_linear, cv2.COLOR_BGR2RGB),
+                       caption=f"INTER_LINEAR ({target_size}x{target_size})", use_container_width=True)
+        sub_col2.image(cv2.cvtColor(img_cubic, cv2.COLOR_BGR2RGB), caption=f"INTER_CUBIC ({target_size}x{target_size})",
+                       use_container_width=True)
+
+        # Download Buttons for Resized Images
+        c1, c2 = st.columns(2)
+        with c1:
+            create_download_button(img_linear, "resized_linear.png", "⬇️ Download Linear")
+        with c2:
+            create_download_button(img_cubic, "resized_cubic.png", "⬇️ Download Cubic")
+
+        # 5. Pixel Comparison
+        st.write("**Pixel Difference (Linear vs Cubic)**")
+        diff = cv2.absdiff(img_linear, img_cubic)
+        diff_gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+        diff_enhanced = cv2.equalizeHist(diff_gray)
+        st.image(diff_enhanced, caption="Highlighting interpolation difference", use_container_width=True)
+
+    with col2:
+        st.subheader("2. Color Space & Flipping")
+
+        # 8 & 9. Color Conversions
+        color_option = st.radio("Select Color Conversion:", ["None", "BGR → Grayscale", "BGR → HSV"])
+        processed_bgr = img_bgr.copy()
+        display_img = img_rgb.copy()
+
+        if color_option == "BGR → Grayscale":
+            processed_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+            display_img = processed_bgr  # Grayscale displays fine natively
+            st.image(display_img, caption="Grayscale Image", use_container_width=True, channels="GRAY")
+        elif color_option == "BGR → HSV":
+            processed_bgr = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
+            display_img = cv2.cvtColor(processed_bgr, cv2.COLOR_HSV2RGB)
+            st.image(display_img, caption="HSV Image", use_container_width=True)
+        else:
+            st.image(display_img, caption="Original Color", use_container_width=True)
+
+        # 7. Horizontal & Vertical Flip
+        flip_option = st.selectbox("Flip Image:", ["None", "Horizontal", "Vertical", "Both"])
+        final_processed = processed_bgr.copy()
+
+        if flip_option == "Horizontal":
+            final_processed = cv2.flip(processed_bgr, 1)
+        elif flip_option == "Vertical":
+            final_processed = cv2.flip(processed_bgr, 0)
+        elif flip_option == "Both":
+            final_processed = cv2.flip(processed_bgr, -1)
+
+        if flip_option != "None":
+            # Convert back to RGB for displaying correctly in Streamlit if it's not grayscale
+            if len(final_processed.shape) == 3 and color_option != "BGR → HSV":
+                disp_flip = cv2.cvtColor(final_processed, cv2.COLOR_BGR2RGB)
+                st.image(disp_flip, caption=f"Flipped: {flip_option}", use_container_width=True)
+            elif color_option == "BGR → HSV":
+                disp_flip = cv2.cvtColor(final_processed, cv2.COLOR_HSV2RGB)
+                st.image(disp_flip, caption=f"Flipped: {flip_option}", use_container_width=True)
+            else:
+                st.image(final_processed, caption=f"Flipped: {flip_option}", use_container_width=True, channels="GRAY")
+
+        # Download Button for Color/Flipped Image
+        create_download_button(final_processed, "color_flipped_image.png", "⬇️ Download Color/Flipped Image")
+
+    st.markdown("---")
+
+    # ================= ROW 2 =================
+    col3, col4 = st.columns(2)
+
+    with col3:
+        # 6. Rotation without cropping
+        st.subheader("3. Rotation (Without Cropping)")
+        angle = st.slider("Rotation Angle (Degrees)", -180, 180, 0)
+
+        if angle != 0:
+            (h_orig, w_orig) = img_bgr.shape[:2]
+            (cX, cY) = (w_orig // 2, h_orig // 2)
+
+            M = cv2.getRotationMatrix2D((cX, cY), angle, 1.0)
+            cos = np.abs(M[0, 0])
+            sin = np.abs(M[0, 1])
+
+            nW = int((h_orig * sin) + (w_orig * cos))
+            nH = int((h_orig * cos) + (w_orig * sin))
+
+            M[0, 2] += (nW / 2) - cX
+            M[1, 2] += (nH / 2) - cY
+
+            rotated_bgr = cv2.warpAffine(img_bgr, M, (nW, nH))
+            rotated_rgb = cv2.cvtColor(rotated_bgr, cv2.COLOR_BGR2RGB)
+
+            st.image(rotated_rgb, caption=f"Rotated by {angle}°", use_container_width=True)
+            create_download_button(rotated_bgr, f"rotated_{angle}.png", "⬇️ Download Rotated Image")
+        else:
+            st.image(img_rgb, caption="0° Rotation", use_container_width=True)
+
+    with col4:
+        # 7. ROI Extraction
+        st.subheader("4. ROI Extraction (Cropping)")
+        st.write("Use sliders to select Region of Interest")
+
+        roi_x = st.slider("X Offset", 0, w - 1, 0)
+        roi_y = st.slider("Y Offset", 0, h - 1, 0)
+
+        max_roi_w = w - roi_x
+        max_roi_h = h - roi_y
+
+        if max_roi_w > 0 and max_roi_h > 0:
+            roi_w = st.slider("ROI Width", 1, max_roi_w, max_roi_w)
+            roi_h = st.slider("ROI Height", 1, max_roi_h, max_roi_h)
+
+            # Crop in BGR for saving, RGB for display
+            roi_bgr = img_bgr[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+            roi_rgb = img_rgb[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+
+            st.image(roi_rgb, caption=f"Extracted ROI ({roi_w}x{roi_h})", use_container_width=True)
+            create_download_button(roi_bgr, "roi_extracted.png", "⬇️ Download ROI Image")
+        else:
+            st.warning("Invalid ROI parameters.")
+
+else:
+    st.info("Ahiya tamaro dataset no image upload karo chalu karva mate.")
