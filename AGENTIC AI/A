@@ -1,1 +1,16 @@
+1. The Defining Characteristic of Agentic AI
+The defining characteristic is goal-oriented autonomy combined with action. A simple chatbot only responds to direct inputs (it is a "talker"). An agentic system takes a high-level goal, breaks it down into a logical sequence of steps, interacts with external environments (using APIs, tools, or software), and iterates on its own until that goal is achieved (it is a "doer").
 
+2. AutoGPT-style Multi-step Execution
+This demonstrates autonomy. Autonomy is the system's ability to operate independently over time. Because the bot is reasoning through the plan, executing actions, evaluating the results, and deciding on the next step without waiting for a human in the loop, it is exercising autonomous control over its own workflow.
+
+3. Why Recommendation Models are Non-Agentic
+Recommendation models are passive pattern-matching tools. While they use sophisticated AI to analyze past behavior and predict what you might like, they lack agency. They cannot actively explore the environment, formulate a plan, use external tools, or execute tasks. They simply take static input data and spit out a mathematical prediction.
+
+4. Reactive vs. Proactive Behavior
+Reactivity is an agent's ability to respond to immediate changes or obstacles in its environment. Example: If an agent tries to scrape a website and gets a 404 error, a reactive agent senses this failure and adjusts by searching for an alternative URL.
+
+Proactivity is the agent taking initiative toward its larger goal without needing an explicit external trigger. Example: An agent tasked with managing your calendar notices a flight delay and automatically texts your client to push the meeting back 30 minutes, without you asking it to check the flight status.
+
+5. The Evolution Beyond Standard LLMs
+Standard Generative AI requires constant human orchestration. The human acts as the "driver," constantly feeding the model prompts, correcting its mistakes, and manually transferring its outputs to other applications. Agentic AI is the next evolution because it hands the steering wheel to the AI. It bridges the gap between generating text and executing complex, multi-system workflows—shifting AI from a conversational assistant to an independent digital worker.
