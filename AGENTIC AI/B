@@ -1,1 +1,154 @@
 
+1. LangGraph: Sequential to Cyclic Graph with Error Correction (Python)
+This code shows how to set up a cycle where if an error is detected in the "check_output" node, it routes back to the "generate" node to fix it.
+
+from typing import TypedDict
+from langgraph.graph import StateGraph, END
+
+# 1. Define the State
+class AgentState(TypedDict):
+    prompt: str
+    response: str
+    error: str
+
+# 2. Define the Nodes (Tasks)
+def generate_response(state: AgentState):
+    # Imagine calling an LLM here
+    draft = "This is the LLM output." 
+    return {"response": draft}
+
+def check_for_errors(state: AgentState):
+    # Validation logic here
+    if "bad word" in state["response"]:
+        return {"error": "Contains invalid content"}
+    return {"error": "None"}
+
+# 3. Define the Conditional Edge Logic
+def route_based_on_error(state: AgentState):
+    if state["error"] != "None":
+        return "generate" # Route back to generate (Cyclic)
+    return "end" # Finish if no error
+
+# 4. Build the Graph
+workflow = StateGraph(AgentState)
+workflow.add_node("generate", generate_response)
+workflow.add_node("validate", check_for_errors)
+
+# Sequential flow first
+workflow.set_entry_point("generate")
+workflow.add_edge("generate", "validate")
+
+# Cyclic/Conditional routing
+workflow.add_conditional_edges(
+    "validate",
+    route_based_on_error,
+    {
+        "generate": "generate",
+        "end": END
+    }
+)
+
+# Compile into an application
+app = workflow.compile()
+
+2. ReAct Agent: SQLAlchemy vs. Web Search (Python)
+Using LangChain, we define two tools. The ReAct agent automatically reads the tool descriptions and decides which one to use based on how ambiguous or specific your query is.
+
+from langchain.agents import initialize_agent, AgentType
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
+
+# 1. Define the Tools
+@tool
+def query_database(sql_query: str) -> str:
+    """Use this tool to fetch specific internal user data or structured company records."""
+    # SQLAlchemy logic goes here
+    return f"Database results for {sql_query}"
+
+@tool
+def web_search(query: str) -> str:
+    """Use this tool when the query is ambiguous, requires recent news, or general world knowledge."""
+    # Web Search API logic goes here
+    return f"Search results for {query}"
+
+tools = [query_database, web_search]
+
+# 2. Initialize the ReAct Agent
+llm = ChatOpenAI(temperature=0, model="gpt-4")
+
+agent = initialize_agent(
+    tools=tools,
+    llm=llm,
+    agent=AgentType.CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+    verbose=True
+)
+
+# 3. Test the Autonomous Decision Making
+# The agent will choose the DB tool here:
+# agent.run("What is the user ID for John Doe in our system?")
+
+# The agent will choose the Web Search tool here:
+# agent.run("What are the latest AI trends in 2026?")
+
+3. AutoGPT Configuration (YAML)
+AutoGPT uses a YAML configuration file to define its persona and operational bounds. You save this as ai_settings.yaml in the AutoGPT directory.
+
+
+ai_name: MarketResearchBot
+ai_role: An autonomous AI agent designed to conduct comprehensive market research on competitor software products and summarize pricing models.
+ai_goals:
+  - Search the web for the top 5 competitors in the CRM software space.
+  - Navigate to their pricing pages and extract subscription tiers.
+  - Compile the findings into a structured markdown report.
+  - Terminate execution once the report is saved.
+
+# Constraints keep the agent safe and focused
+constraints:
+  - Do not use paid APIs that exceed a $5 budget.
+  - Do not execute code on the local machine outside of the designated workspace.
+  - Rely on factual data; do not hallucinate pricing numbers.
+
+# Memory persistence setup
+memory:
+  backend: "redis"  # Stores short/long term memory so the agent remembers past steps
+  redis_host: "localhost"
+  redis_port: 6379
+
+4. If-Else Workflow vs. Semantic Kernel Planner (Python Concept)
+This demonstrates the execution difference. The if-else workflow is rigid, while the Semantic Kernel uses a planner to autonomously string functions together to achieve a goal.
+
+# --- APPROACH A: Rule-Based If-Else (Non-Agentic) ---
+def handle_user_request(request_type, data):
+    # Hardcoded decision paths. No autonomy.
+    if request_type == "summarize":
+        return text_summarizer_function(data)
+    elif request_type == "translate":
+        return language_translator_function(data)
+    else:
+        return "I don't know how to do that."
+
+# --- APPROACH B: Semantic Kernel Planner (Agentic) ---
+import semantic_kernel as sk
+from semantic_kernel.planning import ActionPlanner
+
+# 1. Initialize Kernel and load skills (plugins)
+kernel = sk.Kernel()
+kernel.import_skill(SummarizeSkill(), "Summarizer")
+kernel.import_skill(TranslateSkill(), "Translator")
+
+# 2. Initialize the Planner
+planner = ActionPlanner(kernel)
+
+async def execute_autonomous_plan(user_goal):
+    # The planner reads the goal, understands the available plugins, 
+    # and autonomously decides what to execute and in what order.
+    plan = await planner.create_plan_async(goal=user_goal)
+    
+    # Execute the generated plan
+    result = await plan.invoke_async()
+    return result
+
+# Example Goal: "Take this French article, translate it to English, and give me a 3-bullet summary."
+# The if-else script would fail here without custom code. 
+# The SK Planner will autonomously chain Translator -> Summarizer.
+
